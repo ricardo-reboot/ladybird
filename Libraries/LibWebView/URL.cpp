@@ -48,7 +48,12 @@ Optional<URL::URL> sanitize_url(StringView location, Optional<SearchEngine> cons
     }
 
     // FIXME: Add support for other schemes, e.g. "mailto:". Firefox and Chrome open mailto: locations.
-    static constexpr Array SUPPORTED_SCHEMES { "about"sv, "data"sv, "file"sv, "http"sv, "https"sv, "resource"sv };
+    static constexpr Array SUPPORTED_SCHEMES {
+        "about"sv, "data"sv, "file"sv, "http"sv, "https"sv, "resource"sv,
+#ifdef LADYBIRD_ENABLE_SSHWEB
+        "ssh-web"sv,
+#endif
+    };
     if (!any_of(SUPPORTED_SCHEMES, [&](StringView const& scheme) { return scheme == url->scheme(); }))
         return search_url_or_error();
 
