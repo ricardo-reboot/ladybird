@@ -6,8 +6,11 @@
 
 #include <AK/Format.h>
 #include <LibCore/ArgsParser.h>
+#include <LibCore/EventLoop.h>
+#include <LibIPC/SingleServer.h>
 #include <LibSSHWeb/Version.h>
 #include <Services/SSHWebServer/ClientMode.h>
+#include <Services/SSHWebServer/ConnectionFromClient.h>
 #include <Services/SSHWebServer/Identity.h>
 #include <Services/SSHWebServer/Service.h>
 #include <libssh2.h>
@@ -20,8 +23,10 @@ ErrorOr<int> run(Main::Arguments arguments)
     StringView command;
     StringView identity_label;
     StringView generate_identity;
+    StringView mach_server_name;
     bool accept_host_key = false;
     bool list_identities = false;
+    bool service_mode = false;
 
     Core::ArgsParser parser;
     parser.set_general_help("SSH-Web client/service");
@@ -31,13 +36,28 @@ ErrorOr<int> run(Main::Arguments arguments)
     parser.add_option(generate_identity, "Generate a new ed25519 identity with this label", "generate-identity", 0, "label");
     parser.add_option(list_identities, "List all known identities and exit", "list-identities", 0);
     parser.add_option(accept_host_key, "Auto-accept unknown host keys (scripted/test use only)", "accept-host-key", 0);
+    parser.add_option(service_mode, "Run as long-lived IPC service (default when no --connect)", "service", 0);
+    parser.add_option(mach_server_name, "Mach server name (macOS, set by parent process)", "mach-server-name", 0, "mach_server_name");
     parser.parse(arguments);
 
     if (auto rc = libssh2_init(0); rc != 0)
         return Error::from_string_literal("libssh2_init failed");
 
     int exit_code = 0;
-    if (!generate_identity.is_empty()) {
+    if (service_mode) {
+        // Long-lived IPC service: parent process passed us an accepted socket
+        // via SystemServerTakeover (Linux) or Mach bootstrap (macOS).
+        // ConnectionFromClient handles all incoming SSHWebServer messages.
+        Core::EventLoop event_loop;
+        auto client_or_error = IPC::take_over_accepted_client_from_system_server<ConnectionFromClient>(mach_server_name);
+        if (client_or_error.is_error()) {
+            warnln("error: SSHWebServer service takeover: {}", client_or_error.error());
+            libssh2_exit();
+            return 1;
+        }
+        outln("SSHWebServer running as IPC service (libssh2={})", libssh2_version(0));
+        exit_code = event_loop.exec();
+    } else if (!generate_identity.is_empty()) {
         auto store = SSHWeb::IdentityStore::with_default_root();
         if (store.is_error()) { warnln("error: {}", store.error()); libssh2_exit(); return 1; }
         auto generated = store.value().generate(generate_identity);
