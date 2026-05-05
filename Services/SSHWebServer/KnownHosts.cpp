@@ -23,7 +23,10 @@ KnownHosts::KnownHosts(String root_dir)
 ErrorOr<KnownHosts> KnownHosts::with_default_root()
 {
     auto config = Core::StandardPaths::config_directory();
-    auto root = TRY(String::formatted("{}/sshweb/known_hosts", config));
+    auto sshweb_dir = TRY(String::formatted("{}/sshweb", config));
+    if (!FileSystem::exists(sshweb_dir))
+        TRY(Core::System::mkdir(sshweb_dir, 0700));
+    auto root = TRY(String::formatted("{}/known_hosts", sshweb_dir));
     if (!FileSystem::exists(root))
         TRY(Core::System::mkdir(root, 0700));
     return KnownHosts { move(root) };
