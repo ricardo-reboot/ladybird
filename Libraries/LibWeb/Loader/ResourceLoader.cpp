@@ -17,7 +17,11 @@
 #include <LibRequests/RequestClient.h>
 
 #ifdef LADYBIRD_ENABLE_SSHWEB
+#    include <LibSSHWeb/Packfile.h>
 #    include <LibSSHWeb/URL.h>
+#    include <LibWeb/DOM/Document.h>
+#    include <LibWeb/HTML/TraversableNavigable.h>
+#    include <LibWeb/Page/Page.h>
 #    include <Services/SSHWebServer/Connection.h>
 #    include <Services/SSHWebServer/KnownHosts.h>
 #endif
@@ -414,21 +418,36 @@ RefPtr<Requests::Request> ResourceLoader::load(LoadRequest& request, GC::Root<On
     }
 
 #ifdef LADYBIRD_ENABLE_SSHWEB
-    if (url.scheme() == "ssh-web"sv) {
-        // Plan 5 MVP: open an SSH-Web connection synchronously in-process and
-        // synthesize an HTTP-style response. Plan 5b should replace this with
-        // a proper IPC call to a SSHWebServer helper process via LibSSHWebClient.
+    // Take the ssh-web path if EITHER:
+    //   (a) the request URL itself is ssh-web://...  → receive-pack
+    //   (b) the page that initiated this load is on an ssh-web origin and the
+    //       sub-resource URL is http(s) → proxy-call through the SSH tunnel.
+    //
+    // (b) is what enforces the SSH-Web privacy guarantee: external resources
+    // (fonts, images, scripts) referenced by an ssh-web page never reach the
+    // open internet directly — they go via the server's allowlisted proxy.
+    auto request_scheme_is_sshweb = url.scheme() == "ssh-web"sv;
+    auto initiated_from_sshweb = [&]() -> bool {
+        if (auto page = request.page(); page) {
+            auto traversable = page->top_level_traversable();
+            auto active_document = traversable->active_document();
+            if (active_document && active_document->url().scheme() == "ssh-web"sv)
+                return true;
+        }
+        return false;
+    }();
+
+    if (request_scheme_is_sshweb || (initiated_from_sshweb && url.scheme().is_one_of("http"sv, "https"sv))) {
         auto load_result = handle_sshweb_load_request(request);
         if (load_result.is_error()) {
             auto error_message = ByteString::formatted("ssh-web: {}", load_result.error());
             log_failure(request, error_message);
             on_complete->function()(false, {}, StringView(error_message));
         } else {
-            auto data = load_result.release_value();
+            auto result = load_result.release_value();
             log_success(request);
-            auto headers = HTTP::HeaderList::create({ { "Content-Type"sv, "text/html"sv } });
-            on_headers_received->function()(headers, 200, {});
-            on_data_received->function()(data.bytes());
+            on_headers_received->function()(result.headers, result.status_code, {});
+            on_data_received->function()(result.body.bytes());
             on_complete->function()(true, {}, {});
         }
         return nullptr;
@@ -550,22 +569,91 @@ void ResourceLoader::finish_network_request(NonnullRefPtr<Requests::Request> pro
 }
 
 #ifdef LADYBIRD_ENABLE_SSHWEB
-ErrorOr<ByteBuffer> ResourceLoader::handle_sshweb_load_request(LoadRequest const& request)
+
+// Parses an HTTP/1.1 response (status line, headers, blank line, body) as
+// emitted by sshttpd's proxy-call binary form. We only need a small subset
+// of HTTP/1.1 — single-message, no chunked transfer encoding (sshttpd writes
+// Content-Length explicitly), no trailers.
+static ErrorOr<ResourceLoader::SSHWebLoadResult> parse_sshweb_proxy_response(ByteBuffer&& raw)
 {
-    // Plan 5 MVP: open an SSH-Web connection in-process and run receive-pack
-    // for the requested path. Synchronous; blocks the calling thread for the
-    // duration of the SSH handshake + command execution.
+    StringView view { raw };
+
+    // Find the end of the headers (first blank line).
+    auto header_end = view.find("\r\n\r\n"sv);
+    if (!header_end.has_value())
+        return Error::from_string_literal("ssh-web proxy-call: missing header terminator");
+
+    auto header_block = view.substring_view(0, *header_end);
+    auto body_view = view.substring_view(*header_end + 4);
+
+    auto lines = header_block.lines();
+    if (lines.is_empty())
+        return Error::from_string_literal("ssh-web proxy-call: empty response");
+
+    // Status line: "HTTP/1.1 <code> <reason>"
+    auto status_line = lines[0];
+    auto first_space = status_line.find(' ');
+    if (!first_space.has_value())
+        return Error::from_string_literal("ssh-web proxy-call: malformed status line");
+    auto rest = status_line.substring_view(*first_space + 1);
+    auto second_space = rest.find(' ');
+    auto code_view = second_space.has_value() ? rest.substring_view(0, *second_space) : rest;
+    auto status_code = code_view.to_number<u32>();
+    if (!status_code.has_value())
+        return Error::from_string_literal("ssh-web proxy-call: unparseable status code");
+
+    auto headers = HTTP::HeaderList::create({});
+    for (size_t i = 1; i < lines.size(); ++i) {
+        auto line = lines[i];
+        if (line.is_empty())
+            continue;
+        auto colon = line.find(':');
+        if (!colon.has_value())
+            continue;
+        auto name = line.substring_view(0, *colon);
+        auto value = line.substring_view(*colon + 1).trim_whitespace();
+        headers->append(HTTP::Header::isomorphic_encode(name, value));
+    }
+
+    auto body = TRY(ByteBuffer::copy(body_view.bytes()));
+    return ResourceLoader::SSHWebLoadResult {
+        .status_code = *status_code,
+        .headers = headers,
+        .body = move(body),
+    };
+}
+
+ErrorOr<ResourceLoader::SSHWebLoadResult> ResourceLoader::handle_sshweb_load_request(LoadRequest const& request)
+{
+    // Synchronous in-process load. Plan 5b will route through a long-lived
+    // SSHWebServer helper via LibSSHWebClient.
     //
-    // Plan 5b will replace this with an async IPC call into a long-lived
-    // SSHWebServer helper process via LibSSHWebClient.
-    auto const& url = request.url().value();
+    // Two modes selected by request URL scheme:
+    //   - ssh-web://...  → receive-pack <path>; response is a PACK v2 packfile,
+    //                      we extract the first blob and synthesize headers.
+    //   - http(s)://...  → proxy-call GET <full-url>; response is an HTTP/1.1
+    //                      message we parse to surface upstream status +
+    //                      Content-Type / Cache-Control / ETag / etc.
+    //                      end-to-end.
+    auto const& request_url = request.url().value();
+    bool is_proxy_call = request_url.scheme().is_one_of("http"sv, "https"sv);
 
-    auto sshweb_url = TRY(SSHWeb::URL::parse(url.serialize()));
+    String origin_url_string;
+    if (is_proxy_call) {
+        auto page = request.page();
+        if (!page)
+            return Error::from_string_literal("ssh-web proxy-call: no Page on request");
+        auto traversable = page->top_level_traversable();
+        auto document = traversable->active_document();
+        if (!document)
+            return Error::from_string_literal("ssh-web proxy-call: no active document");
+        origin_url_string = document->url().serialize();
+    } else {
+        origin_url_string = request_url.serialize();
+    }
 
+    auto sshweb_url = TRY(SSHWeb::URL::parse(origin_url_string));
     auto known_hosts = TRY(SSHWeb::KnownHosts::with_default_root());
-
-    // Auto-accept TOFU prompts in this MVP. Plan 7 will route these through
-    // the UI process for a real user dialog.
     SSHWeb::TOFUDecisionCallback decision = [](StringView, u16, SSHWeb::HostKey const&) -> bool {
         return true;
     };
@@ -577,12 +665,29 @@ ErrorOr<ByteBuffer> ResourceLoader::handle_sshweb_load_request(LoadRequest const
         move(decision),
         {}));
 
-    // Build the receive-pack command for the requested path. The SSH-Web
-    // protocol uses `receive-pack <path>` as the document-fetch verb.
+    if (is_proxy_call) {
+        auto command = ByteString::formatted("proxy-call GET {}", request_url.serialize());
+        auto raw = TRY(connection->execute_command(command.view()));
+        return parse_sshweb_proxy_response(move(raw));
+    }
+
+    // receive-pack path — synthesize headers ourselves.
     auto path = sshweb_url.path.is_empty() ? "/"_string : sshweb_url.path;
     auto command = ByteString::formatted("receive-pack {}", path);
+    auto packfile = TRY(connection->execute_command(command.view()));
+    auto body = TRY(SSHWeb::first_blob_in_packfile(packfile.bytes()));
 
-    return connection->execute_command(command.view());
+    auto path_view = request_url.serialize_path();
+    StringView mime = Core::guess_mime_type_based_on_filename(path_view);
+    if (mime == "application/octet-stream"sv)
+        mime = "text/html"sv;
+    auto headers = HTTP::HeaderList::create({});
+    headers->append(HTTP::Header::isomorphic_encode("Content-Type"sv, mime));
+    return SSHWebLoadResult {
+        .status_code = 200,
+        .headers = headers,
+        .body = move(body),
+    };
 }
 #endif
 

@@ -81,10 +81,24 @@ private:
     void handle_resource_load_request(LoadRequest const& request, ResourceHandler on_resource, ErrorHandler on_error);
 
 #ifdef LADYBIRD_ENABLE_SSHWEB
-    // Plan 5 MVP: synchronous in-process ssh-web:// load. Returns response
-    // bytes on success. Plan 5b will replace this with an async IPC call to
-    // a SSHWebServer helper process.
-    ErrorOr<ByteBuffer> handle_sshweb_load_request(LoadRequest const& request);
+public:
+    // Public so the static parse helper in ResourceLoader.cpp can construct it.
+    struct SSHWebLoadResult {
+        u32 status_code { 200 };
+        NonnullRefPtr<HTTP::HeaderList> headers;
+        ByteBuffer body;
+    };
+
+private:
+    // Synchronous in-process ssh-web:// load. Plan 5b will replace this with
+    // an async IPC call to a SSHWebServer helper process.
+    //
+    // For receive-pack (ssh-web:// scheme), status/headers are synthesized.
+    //
+    // For proxy-call (http(s):// scheme), the server emits the upstream HTTP
+    // response in HTTP/1.1 wire format; this method parses it and surfaces
+    // upstream status + Content-Type / Cache-Control / ETag end-to-end.
+    ErrorOr<SSHWebLoadResult> handle_sshweb_load_request(LoadRequest const& request);
 #endif
 
     RefPtr<Requests::Request> start_network_request(LoadRequest const&);
