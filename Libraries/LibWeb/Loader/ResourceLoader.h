@@ -80,6 +80,13 @@ private:
     template<typename ResourceHandler, typename ErrorHandler>
     void handle_resource_load_request(LoadRequest const& request, ResourceHandler on_resource, ErrorHandler on_error);
 
+#ifdef LADYBIRD_ENABLE_SSHWEB
+    // Plan 5 MVP: synchronous in-process ssh-web:// load. Returns response
+    // bytes on success. Plan 5b will replace this with an async IPC call to
+    // a SSHWebServer helper process.
+    ErrorOr<ByteBuffer> handle_sshweb_load_request(LoadRequest const& request);
+#endif
+
     RefPtr<Requests::Request> start_network_request(LoadRequest const&);
     void handle_network_response_headers(LoadRequest const&, HTTP::HeaderList const&);
     void finish_network_request(NonnullRefPtr<Requests::Request>);

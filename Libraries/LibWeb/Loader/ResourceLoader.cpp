@@ -15,6 +15,12 @@
 #include <LibHTTP/Cookie/ParsedCookie.h>
 #include <LibRequests/Request.h>
 #include <LibRequests/RequestClient.h>
+
+#ifdef LADYBIRD_ENABLE_SSHWEB
+#    include <LibSSHWeb/URL.h>
+#    include <Services/SSHWebServer/Connection.h>
+#    include <Services/SSHWebServer/KnownHosts.h>
+#endif
 #include <LibURL/Parser.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Requests.h>
 #include <LibWeb/Fetch/Infrastructure/URL.h>
@@ -407,6 +413,28 @@ RefPtr<Requests::Request> ResourceLoader::load(LoadRequest& request, GC::Root<On
         return nullptr;
     }
 
+#ifdef LADYBIRD_ENABLE_SSHWEB
+    if (url.scheme() == "ssh-web"sv) {
+        // Plan 5 MVP: open an SSH-Web connection synchronously in-process and
+        // synthesize an HTTP-style response. Plan 5b should replace this with
+        // a proper IPC call to a SSHWebServer helper process via LibSSHWebClient.
+        auto load_result = handle_sshweb_load_request(request);
+        if (load_result.is_error()) {
+            auto error_message = ByteString::formatted("ssh-web: {}", load_result.error());
+            log_failure(request, error_message);
+            on_complete->function()(false, {}, StringView(error_message));
+        } else {
+            auto data = load_result.release_value();
+            log_success(request);
+            auto headers = HTTP::HeaderList::create({ { "Content-Type"sv, "text/html"sv } });
+            on_headers_received->function()(headers, 200, {});
+            on_data_received->function()(data.bytes());
+            on_complete->function()(true, {}, {});
+        }
+        return nullptr;
+    }
+#endif
+
     if (!url.scheme().is_one_of("http"sv, "https"sv)) {
         auto not_implemented_error = ByteString::formatted("Protocol not implemented: {}", url.scheme());
         log_failure(request, not_implemented_error);
@@ -520,5 +548,42 @@ void ResourceLoader::finish_network_request(NonnullRefPtr<Requests::Request> pro
         VERIFY(did_remove);
     });
 }
+
+#ifdef LADYBIRD_ENABLE_SSHWEB
+ErrorOr<ByteBuffer> ResourceLoader::handle_sshweb_load_request(LoadRequest const& request)
+{
+    // Plan 5 MVP: open an SSH-Web connection in-process and run receive-pack
+    // for the requested path. Synchronous; blocks the calling thread for the
+    // duration of the SSH handshake + command execution.
+    //
+    // Plan 5b will replace this with an async IPC call into a long-lived
+    // SSHWebServer helper process via LibSSHWebClient.
+    auto const& url = request.url().value();
+
+    auto sshweb_url = TRY(SSHWeb::URL::parse(url.serialize()));
+
+    auto known_hosts = TRY(SSHWeb::KnownHosts::with_default_root());
+
+    // Auto-accept TOFU prompts in this MVP. Plan 7 will route these through
+    // the UI process for a real user dialog.
+    SSHWeb::TOFUDecisionCallback decision = [](StringView, u16, SSHWeb::HostKey const&) -> bool {
+        return true;
+    };
+
+    auto connection = TRY(SSHWeb::Connection::open(
+        sshweb_url.host.bytes_as_string_view(),
+        sshweb_url.port,
+        known_hosts,
+        move(decision),
+        {}));
+
+    // Build the receive-pack command for the requested path. The SSH-Web
+    // protocol uses `receive-pack <path>` as the document-fetch verb.
+    auto path = sshweb_url.path.is_empty() ? "/"_string : sshweb_url.path;
+    auto command = ByteString::formatted("receive-pack {}", path);
+
+    return connection->execute_command(command.view());
+}
+#endif
 
 }

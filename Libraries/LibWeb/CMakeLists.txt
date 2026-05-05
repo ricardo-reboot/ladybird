@@ -1273,4 +1273,12 @@ if (HAS_FONTCONFIG)
     target_link_libraries(LibWeb PRIVATE Fontconfig::Fontconfig)
 endif()
 
+if (LADYBIRD_ENABLE_SSHWEB)
+    # Plan 5 MVP: link the sshwebservice static library so ResourceLoader can
+    # call SSHWeb::Connection / SSHWeb::KnownHosts directly. Plan 5b should
+    # replace this with an IPC dependency on a SSHWebServer helper process.
+    target_link_libraries(LibWeb PRIVATE sshwebservice)
+    target_compile_definitions(LibWeb PRIVATE LADYBIRD_ENABLE_SSHWEB=1)
+endif()
+
 generate_js_bindings(LibWeb)
