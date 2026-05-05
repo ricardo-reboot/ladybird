@@ -3,6 +3,7 @@ find_package(libssh2 CONFIG REQUIRED)
 set(SOURCES
     ClientMode.cpp
     Connection.cpp
+    Identity.cpp
     KnownHosts.cpp
     Service.cpp
 )

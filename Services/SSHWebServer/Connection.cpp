@@ -74,7 +74,8 @@ ErrorOr<NonnullOwnPtr<Connection>> Connection::open(
     StringView host,
     u16 port,
     KnownHosts& known_hosts,
-    TOFUDecisionCallback tofu_decision)
+    TOFUDecisionCallback tofu_decision,
+    Optional<Identity> identity)
 {
     int sock = TRY(tcp_connect(host, port));
     auto* session = libssh2_session_init();
@@ -126,16 +127,33 @@ ErrorOr<NonnullOwnPtr<Connection>> Connection::open(
         TRY(known_hosts.record(host, port, received));
     }
 
-    // Anonymous mode: trigger "none" auth via the side-effect of libssh2_userauth_list.
-    // If the server accepts none auth, the session becomes authenticated; otherwise
-    // it returns a list of methods and we fail (Plan 4 will add publickey auth).
-    char const* anonymous_user = "anonymous";
-    libssh2_userauth_list(session, anonymous_user, static_cast<unsigned int>(__builtin_strlen(anonymous_user)));
-    if (!libssh2_userauth_authenticated(session)) {
-        libssh2_session_disconnect(session, "anonymous auth not accepted");
-        libssh2_session_free(session);
-        close(sock);
-        return Error::from_string_literal("Server does not accept anonymous auth (Plan 4 will add publickey)");
+    if (identity.has_value()) {
+        // Identified-tier: publickey auth using the identity's ed25519 keypair.
+        ByteString user = ByteString::formatted("sshweb:{}", identity->label);
+        ByteString pub = identity->public_key_path.to_byte_string();
+        ByteString priv = identity->private_key_path.to_byte_string();
+        if (libssh2_userauth_publickey_fromfile_ex(
+                session,
+                user.characters(),
+                static_cast<unsigned int>(user.length()),
+                pub.characters(),
+                priv.characters(),
+                nullptr) != 0) {
+            libssh2_session_disconnect(session, "publickey auth failed");
+            libssh2_session_free(session);
+            close(sock);
+            return Error::from_string_literal("publickey authentication failed");
+        }
+    } else {
+        // Anonymous mode: trigger "none" auth via the side-effect of libssh2_userauth_list.
+        char const* anonymous_user = "anonymous";
+        libssh2_userauth_list(session, anonymous_user, static_cast<unsigned int>(__builtin_strlen(anonymous_user)));
+        if (!libssh2_userauth_authenticated(session)) {
+            libssh2_session_disconnect(session, "anonymous auth not accepted");
+            libssh2_session_free(session);
+            close(sock);
+            return Error::from_string_literal("Server does not accept anonymous auth");
+        }
     }
 
     return adopt_own(*new Connection { sock, session, move(received) });

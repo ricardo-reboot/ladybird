@@ -9,6 +9,7 @@
 #include <LibSSHWeb/URL.h>
 #include <Services/SSHWebServer/ClientMode.h>
 #include <Services/SSHWebServer/Connection.h>
+#include <Services/SSHWebServer/Identity.h>
 #include <Services/SSHWebServer/KnownHosts.h>
 #include <stdio.h>
 
@@ -42,7 +43,14 @@ ErrorOr<int> run_client_mode(ClientModeOptions const& options)
         };
     }
 
-    auto connection = TRY(SSHWeb::Connection::open(url.host, url.port, known_hosts, move(decision)));
+    Optional<SSHWeb::Identity> identity;
+    if (!options.identity_label.is_empty()) {
+        auto store = TRY(SSHWeb::IdentityStore::with_default_root());
+        identity = TRY(store.get(options.identity_label));
+        outln("Using identity '{}' (key: {})", identity->label, identity->private_key_path);
+    }
+
+    auto connection = TRY(SSHWeb::Connection::open(url.host, url.port, known_hosts, move(decision), move(identity)));
     auto response = TRY(connection->execute_command(options.command));
 
     if (options.command.starts_with("capabilities"sv)) {

@@ -14,6 +14,7 @@ namespace SSHWebService {
 struct ClientModeOptions {
     StringView url;
     StringView command;
+    StringView identity_label;  // empty -> anonymous
     bool accept_host_key { false };
 };
 

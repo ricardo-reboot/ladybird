@@ -12,6 +12,8 @@
 #include <AK/NonnullOwnPtr.h>
 #include <AK/OwnPtr.h>
 #include <AK/String.h>
+#include <AK/Optional.h>
+#include <Services/SSHWebServer/Identity.h>
 #include <Services/SSHWebServer/KnownHosts.h>
 
 struct _LIBSSH2_SESSION;
@@ -29,7 +31,8 @@ public:
         StringView host,
         u16 port,
         KnownHosts& known_hosts,
-        TOFUDecisionCallback tofu_decision);
+        TOFUDecisionCallback tofu_decision,
+        Optional<Identity> identity = {});
 
     ~Connection();
 
