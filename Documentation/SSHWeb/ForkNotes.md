@@ -16,11 +16,13 @@ cmake -DLADYBIRD_ENABLE_SSHWEB=OFF ...
 
 ## Added components
 
-| Path | Purpose |
+| Path | Eventual purpose |
 |---|---|
 | `Libraries/LibSSHWeb/` | Shared types: protocol version, manifest schema, IPC messages, URL parsing. |
 | `Services/SSHWebServer/` | Out-of-process SSH-Web client: connection pool, key store, capabilities cache. |
 | `Tests/LibSSHWeb/` | Unit tests for `LibSSHWeb`. |
+
+Plan 1 status: scaffolding only — `LibSSHWeb` currently contains only `Version.h`, and `SSHWebServer` is a libssh2-linked stub that prints version info and exits. Protocol logic arrives in Plans 2-8.
 
 ## Upstream rebase cadence
 
