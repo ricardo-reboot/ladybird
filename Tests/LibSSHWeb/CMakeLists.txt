@@ -1,4 +1,5 @@
 set(TEST_SOURCES
+    TestSSHWebURL.cpp
     TestVersion.cpp
 )
 

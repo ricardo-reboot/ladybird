@@ -1,4 +1,5 @@
 set(SOURCES
+    URL.cpp
     Version.cpp
 )
 
