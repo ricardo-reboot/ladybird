@@ -29,6 +29,11 @@ option(ENABLE_CI_BASELINE_CPU "Use a baseline CPU target for improved ccache sha
 
 option(LADYBIRD_ENABLE_SSHWEB "Enable the SSH-Web protocol stack (sshweb-browser fork)" ON)
 message(STATUS "LADYBIRD_ENABLE_SSHWEB: ${LADYBIRD_ENABLE_SSHWEB}")
+if (LADYBIRD_ENABLE_SSHWEB)
+    # Project-wide define so headers (e.g. Fetch/Infrastructure/URL.h) and
+    # all translation units agree on the FETCH_SCHEMES array.
+    add_compile_definitions(LADYBIRD_ENABLE_SSHWEB=1)
+endif()
 
 # lto1 uses a crazy amount of RAM in static builds.
 # Disable LTO for static gcc builds unless explicitly asked for.

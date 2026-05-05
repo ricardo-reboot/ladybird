@@ -1184,6 +1184,12 @@ GC::Ref<PendingResponse> scheme_fetch(JS::Realm& realm, Infrastructure::FetchPar
         // Return the result of running HTTP fetch given fetchParams.
         return http_fetch(realm, fetch_params);
     }
+#ifdef LADYBIRD_ENABLE_SSHWEB
+    // -> "ssh-web" — routed through ResourceLoader::handle_sshweb_load_request.
+    else if (request->current_url().scheme() == "ssh-web"sv) {
+        return nonstandard_resource_loader_file_or_http_network_fetch(realm, fetch_params);
+    }
+#endif
 
     // 4. Return a network error.
     auto message = request->current_url().scheme() == "about"sv
