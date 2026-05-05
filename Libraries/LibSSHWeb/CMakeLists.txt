@@ -1,4 +1,5 @@
 set(SOURCES
+    Manifest.cpp
     URL.cpp
     Version.cpp
 )
