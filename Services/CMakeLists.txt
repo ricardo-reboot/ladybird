@@ -1,5 +1,8 @@
 add_subdirectory(ImageDecoder)
 add_subdirectory(RequestServer)
+if (LADYBIRD_ENABLE_SSHWEB)
+    add_subdirectory(SSHWebServer)
+endif()
 add_subdirectory(WebContent)
 add_subdirectory(WebDriver)
 add_subdirectory(WebWorker)
