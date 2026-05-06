@@ -705,6 +705,11 @@ void ResourceLoader::dispatch_sshweb_load_request(
     // SSH host:port). The actual fetch target is encoded in the command
     // string ("proxy-call GET https://..."). Sending the http(s) request URL
     // here would fail the server-side SSHWeb::URL::parse.
+    // Capture page_id for TOFU prompt routing (Plan 7B).
+    u64 page_id = 0;
+    if (auto page = request.page())
+        page_id = page->client().id();
+
     auto serialized_path = request_url.serialize_path();
     auto origin_url_for_ipc = URL::Parser::basic_parse(origin_url_string).value();
     m_sshweb_client->execute(origin_url_for_ipc, move(command),
@@ -728,24 +733,57 @@ void ResourceLoader::dispatch_sshweb_load_request(
                 on_data_received->function()(r.body.bytes());
                 on_complete->function()(true, {}, {});
             } else {
-                // receive-pack: extract blob from packfile, synthesize headers.
-                auto blob_or_error = SSHWeb::first_blob_in_packfile(raw.bytes());
-                if (blob_or_error.is_error()) {
-                    auto msg = ByteString::formatted("ssh-web: {}", blob_or_error.error());
-                    on_complete->function()(false, {}, StringView(msg));
-                    return;
+                // receive-pack response is one of two formats:
+                //   1. Git packfile (filesystem mode) — first 4 bytes "PACK"
+                //   2. HTTP/1.1 wire format (server in backend-fallback mode) —
+                //      starts with "HTTP/" — same shape proxy-call returns.
+                // Detect by sniffing the first 4 bytes.
+                auto bytes = raw.bytes();
+                bool is_pack = bytes.size() >= 4 && bytes[0] == 'P' && bytes[1] == 'A' && bytes[2] == 'C' && bytes[3] == 'K';
+                if (is_pack) {
+                    auto blob_or_error = SSHWeb::first_blob_in_packfile(bytes);
+                    if (blob_or_error.is_error()) {
+                        auto msg = ByteString::formatted("ssh-web: {}", blob_or_error.error());
+                        on_complete->function()(false, {}, StringView(msg));
+                        return;
+                    }
+                    auto body = blob_or_error.release_value();
+                    StringView mime = Core::guess_mime_type_based_on_filename(serialized_path);
+                    if (mime == "application/octet-stream"sv)
+                        mime = "text/html"sv;
+                    auto headers = HTTP::HeaderList::create({});
+                    headers->append(HTTP::Header::isomorphic_encode("Content-Type"sv, mime));
+                    on_headers_received->function()(headers, 200, {});
+                    on_data_received->function()(body.bytes());
+                    on_complete->function()(true, {}, {});
+                } else {
+                    // Backend-fallback path: parse HTTP/1.1 wire format.
+                    auto parsed = parse_sshweb_proxy_response(move(raw));
+                    if (parsed.is_error()) {
+                        // Backend likely down / returned garbage. Synthesize a
+                        // 502 Bad Gateway so the user sees a readable page
+                        // instead of a raw parser error.
+                        auto headers = HTTP::HeaderList::create({});
+                        headers->append(HTTP::Header::isomorphic_encode("Content-Type"sv, "text/html; charset=utf-8"sv));
+                        auto body = ByteString::formatted(
+                            "<!DOCTYPE html><meta charset=utf-8><title>502 Bad Gateway</title>"
+                            "<style>body{{font:14px system-ui,sans-serif;max-width:40rem;margin:4rem auto;padding:0 1rem;color:#1a1a1a}}"
+                            "h1{{font-size:1.4rem}}code{{background:#f0f0f0;padding:.1rem .3rem;border-radius:3px}}</style>"
+                            "<h1>502 Bad Gateway</h1>"
+                            "<p>The SSH-Web server's backend did not return a valid HTTP response.</p>"
+                            "<p><code>{}</code></p>", parsed.error());
+                        on_headers_received->function()(headers, 502, {});
+                        on_data_received->function()(StringView(body).bytes());
+                        on_complete->function()(true, {}, {});
+                        return;
+                    }
+                    auto r = parsed.release_value();
+                    on_headers_received->function()(r.headers, r.status_code, {});
+                    on_data_received->function()(r.body.bytes());
+                    on_complete->function()(true, {}, {});
                 }
-                auto body = blob_or_error.release_value();
-                StringView mime = Core::guess_mime_type_based_on_filename(serialized_path);
-                if (mime == "application/octet-stream"sv)
-                    mime = "text/html"sv;
-                auto headers = HTTP::HeaderList::create({});
-                headers->append(HTTP::Header::isomorphic_encode("Content-Type"sv, mime));
-                on_headers_received->function()(headers, 200, {});
-                on_data_received->function()(body.bytes());
-                on_complete->function()(true, {}, {});
             }
-        });
+        }, page_id);
 }
 #endif
 
