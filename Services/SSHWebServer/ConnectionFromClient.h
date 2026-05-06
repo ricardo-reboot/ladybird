@@ -6,8 +6,10 @@
 
 #pragma once
 
+#include <AK/ByteString.h>
 #include <AK/HashMap.h>
 #include <LibIPC/ConnectionFromClient.h>
+#include <Services/SSHWebServer/Connection.h>
 #include <Services/SSHWebServer/SSHWebClientEndpoint.h>
 #include <Services/SSHWebServer/SSHWebServerEndpoint.h>
 
@@ -39,6 +41,14 @@ private:
     virtual void start_request(u64 request_id, URL::URL url, ByteString command) override;
     virtual Messages::SSHWebServer::StopRequestResponse stop_request(u64 request_id) override;
     virtual void tofu_decision(u64 prompt_id, bool accepted) override;
+
+    // host:port -> open SSHWeb::Connection. Lazily populated by start_request.
+    HashMap<ByteString, NonnullOwnPtr<SSHWeb::Connection>> m_ssh_pool;
+
+    static ByteString pool_key(StringView host, u16 port)
+    {
+        return ByteString::formatted("{}:{}", host, port);
+    }
 };
 
 }

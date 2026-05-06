@@ -5,13 +5,23 @@
  */
 
 #include <AK/Format.h>
-#include <LibCore/EventLoop.h>
+#include <AK/Vector.h>
+#include <LibIPC/TransportHandle.h>
 #include <LibSSHWeb/URL.h>
 #include <Services/SSHWebServer/Connection.h>
 #include <Services/SSHWebServer/ConnectionFromClient.h>
 #include <Services/SSHWebServer/KnownHosts.h>
 
 namespace SSHWebService {
+
+// Static registry keeping per-WebContent ConnectionFromClient instances alive
+// for the lifetime of the SSHWebServer process. Mirrors RequestServer's
+// pattern. Each entry corresponds to one connected WebContent process.
+static Vector<NonnullRefPtr<ConnectionFromClient>>& secondary_connections()
+{
+    static Vector<NonnullRefPtr<ConnectionFromClient>> s_connections;
+    return s_connections;
+}
 
 ConnectionFromClient::ConnectionFromClient(NonnullOwnPtr<IPC::Transport> transport)
     : IPC::ConnectionFromClient<SSHWebClientEndpoint, SSHWebServerEndpoint>(*this, move(transport), 1)
@@ -22,9 +32,10 @@ ConnectionFromClient::~ConnectionFromClient() = default;
 
 void ConnectionFromClient::die()
 {
-    // Plan 5 has a single client at a time. When it disconnects, exit.
-    // Plan 5b will track multiple connections and only remove the dead one.
-    Core::EventLoop::current().quit(0);
+    // Plan 5b: clear the SSH pool so all connections for this client are
+    // closed. Do NOT quit the event loop — other clients may still be
+    // connected. The process exits naturally when the last client disconnects.
+    m_ssh_pool.clear();
 }
 
 Messages::SSHWebServer::InitTransportResponse ConnectionFromClient::init_transport([[maybe_unused]] int peer_pid)
@@ -37,10 +48,19 @@ Messages::SSHWebServer::InitTransportResponse ConnectionFromClient::init_transpo
 
 Messages::SSHWebServer::ConnectNewClientResponse ConnectionFromClient::connect_new_client()
 {
-    // Plan 5 simplification: we don't yet support spawning sub-clients for
-    // additional tabs. Plan 5b will implement this by handing back a
-    // freshly-paired transport handle.
-    return IPC::TransportHandle {};
+    // Plan 5b: hand the caller (a WebContent process) a freshly-paired
+    // transport. The local end is held by a new ConnectionFromClient kept
+    // alive in secondary_connections(); the remote end is returned over IPC.
+    auto paired_or_error = IPC::Transport::create_paired();
+    if (paired_or_error.is_error()) {
+        dbgln("SSHWebServer::connect_new_client: create_paired failed: {}", paired_or_error.error());
+        return IPC::TransportHandle {};
+    }
+    auto paired = paired_or_error.release_value();
+    auto remote_handle = move(paired.remote_handle);
+    auto new_client = adopt_ref(*new ConnectionFromClient(move(paired.local)));
+    secondary_connections().append(new_client);
+    return remote_handle;
 }
 
 Messages::SSHWebServer::StopRequestResponse ConnectionFromClient::stop_request(u64)
@@ -76,22 +96,30 @@ void ConnectionFromClient::start_request(u64 request_id, URL::URL url, ByteStrin
     }
     auto known_hosts = known_hosts_or_error.release_value();
 
-    // Plan 5: auto-accept TOFU. Plan 7 will route through the UI process.
-    SSHWeb::TOFUDecisionCallback decision = [](StringView, u16, SSHWeb::HostKey const&) -> bool {
-        return true;
-    };
+    // Plan 5b: pool lookup — reuse an open connection if one exists for this host:port.
+    auto key = pool_key(sshweb_url.host.bytes_as_string_view(), sshweb_url.port);
+    SSHWeb::Connection* connection = nullptr;
+    if (auto it = m_ssh_pool.find(key); it != m_ssh_pool.end()) {
+        connection = it->value.ptr();
+    } else {
+        // Plan 5: auto-accept TOFU. Plan 7 will route through the UI process.
+        SSHWeb::TOFUDecisionCallback decision = [](StringView, u16, SSHWeb::HostKey const&) -> bool {
+            return true;
+        };
 
-    auto connection_or_error = SSHWeb::Connection::open(
-        sshweb_url.host.bytes_as_string_view(),
-        sshweb_url.port,
-        known_hosts,
-        move(decision),
-        {});
-    if (connection_or_error.is_error()) {
-        async_request_finished(request_id, ByteString::formatted("ssh connect: {}", connection_or_error.error()));
-        return;
+        auto connection_or_error = SSHWeb::Connection::open(
+            sshweb_url.host.bytes_as_string_view(),
+            sshweb_url.port,
+            known_hosts,
+            move(decision),
+            {});
+        if (connection_or_error.is_error()) {
+            async_request_finished(request_id, ByteString::formatted("ssh connect: {}", connection_or_error.error()));
+            return;
+        }
+        m_ssh_pool.set(key, connection_or_error.release_value());
+        connection = m_ssh_pool.find(key)->value.ptr();
     }
-    auto connection = connection_or_error.release_value();
 
     auto bytes_or_error = connection->execute_command(command.view());
     if (bytes_or_error.is_error()) {
