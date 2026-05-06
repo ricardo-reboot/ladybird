@@ -23,6 +23,7 @@
 #include <LibWeb/HTML/EventHandler.h>
 #include <LibWeb/HTML/EventNames.h>
 #include <LibWeb/HTML/MessageEvent.h>
+#include <LibWeb/HTML/TraversableNavigable.h>
 #include <LibWeb/HTML/WindowOrWorkerGlobalScope.h>
 #include <LibWeb/Loader/ResourceLoader.h>
 #include <LibWeb/Page/Page.h>
@@ -197,6 +198,38 @@ ErrorOr<void> WebSocket::establish_web_socket_connection(URL::URL const& url_rec
 
     auto& window_or_worker = as<HTML::WindowOrWorkerGlobalScopeMixin>(client.global_object());
     auto origin_string = window_or_worker.origin().to_byte_string();
+
+#ifdef LADYBIRD_ENABLE_SSHWEB
+    // Block ALL WebSocket connections from ssh-web origins. There is no SSH-tunnelled
+    // WebSocket transport yet (Plan 6), so any ws/wss attempt from an ssh-web page would
+    // open a direct outbound socket — violating the privacy guarantee that no traffic
+    // leaves the SSH tunnel. Fire error + close so JS sees readyState === CLOSED.
+    // (Even allowlisted hosts are blocked: fonts don't use WS and a loophole here would
+    // create a data-exfiltration vector via WebSocket to an allowlisted host.)
+    {
+        // Block ALL WebSocket connections from ssh-web origins. There is no
+        // SSH-tunnelled WebSocket transport yet, so any ws/wss attempt would
+        // open a direct outbound socket and bypass the SSH-Web privacy
+        // guarantee — even an allowlisted host would create an exfiltration
+        // vector via WebSocket frames. Surface as readyState=CLOSED + close
+        // event 1006 so the JS side observes a clean failure.
+        //
+        // Note: ssh-web pages currently serialize their origin as "null" in
+        // Ladybird (not yet a tuple-origin scheme), so we cannot use
+        // Origin::scheme() for the check. Read the principal page's top-level
+        // document URL instead — same trick ResourceLoader uses.
+        bool is_sshweb_origin = false;
+        auto& page = Bindings::principal_host_defined_page(realm());
+        auto traversable = page.top_level_traversable();
+        if (auto document = traversable->active_document(); document)
+            is_sshweb_origin = (document->url().scheme() == "ssh-web"sv);
+        if (is_sshweb_origin) {
+            on_error();
+            on_close(1006, "Blocked by SSH-Web policy: no WebSocket transport available"_string, false);
+            return {};
+        }
+    }
+#endif
 
     Vector<ByteString> protocol_byte_strings;
     for (auto const& protocol : protocols)
