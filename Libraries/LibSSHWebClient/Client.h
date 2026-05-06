@@ -9,7 +9,9 @@
 #include <AK/ByteBuffer.h>
 #include <AK/Function.h>
 #include <AK/HashMap.h>
+#include <AK/Optional.h>
 #include <LibIPC/ConnectionToServer.h>
+#include <LibSSHWeb/Manifest.h>
 #include <LibURL/URL.h>
 #include <Services/SSHWebServer/SSHWebClientEndpoint.h>
 #include <Services/SSHWebServer/SSHWebServerEndpoint.h>
@@ -38,6 +40,21 @@ public:
     // exactly once with the accumulated response bytes or an error.
     void execute(URL::URL const& url, ByteString command, OnComplete on_complete);
 
+    // Capabilities manifest — populated after connect via set_manifest().
+    void set_manifest(SSHWeb::CapabilitiesManifest manifest) { m_manifest = move(manifest); }
+    Optional<SSHWeb::CapabilitiesManifest> const& manifest() const { return m_manifest; }
+
+    // Kick an async capabilities fetch for the given origin URL. The manifest
+    // is stored on arrival. Safe to call multiple times; subsequent calls are
+    // ignored once the manifest is loaded (or a fetch is already in-flight).
+    void fetch_capabilities_async(URL::URL const& origin_url);
+
+    // Returns true if the given host is in the server's proxy-cache.allow list.
+    // Exact match only (subdomain matching is a future enhancement).
+    // Returns false if the manifest has not been loaded yet — callers should
+    // treat this conservatively (block the request).
+    bool is_host_allowlisted(StringView host) const;
+
 private:
     // SSHWebClientEndpoint overrides — called by the server back at us.
     virtual void tofu_prompt(u64 prompt_id, ByteString host, u16 port, ByteString key_type, ByteString fingerprint_sha256) override;
@@ -51,6 +68,8 @@ private:
 
     HashMap<u64, PendingRequest> m_pending;
     u64 m_next_request_id { 1 };
+    Optional<SSHWeb::CapabilitiesManifest> m_manifest;
+    bool m_capabilities_fetch_in_flight { false };
 };
 
 }

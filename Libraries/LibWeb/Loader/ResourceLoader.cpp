@@ -436,6 +436,32 @@ RefPtr<Requests::Request> ResourceLoader::load(LoadRequest& request, GC::Root<On
     }();
 
     if (request_scheme_is_sshweb || (initiated_from_sshweb && url.scheme().is_one_of("http"sv, "https"sv))) {
+        // For ssh-web:// (receive-pack) requests: kick a capabilities fetch so
+        // the allowlist is populated before subresource http(s) requests fire.
+        // This implements race-mitigation strategy (a): the manifest fetch is
+        // in-flight while the main document is being received and parsed; by the
+        // time JS issues fetch() to external hosts the manifest has typically
+        // arrived. The fetch is idempotent — subsequent calls are no-ops.
+        if (request_scheme_is_sshweb && m_sshweb_client) {
+            m_sshweb_client->fetch_capabilities_async(url);
+        }
+
+        // Enforce the proxy allowlist for outbound http(s) requests from ssh-web
+        // origins. Requests to hosts NOT in the server's proxy-cache.allow list
+        // are blocked here before any socket is opened.
+        if (!request_scheme_is_sshweb) {
+            auto host = url.serialized_host();
+            bool allowed = m_sshweb_client && m_sshweb_client->is_host_allowlisted(host);
+            if (!allowed) {
+                auto msg = ByteString::formatted(
+                    "ssh-web: request to '{}' blocked — host '{}' not in server's proxy-cache.allow list",
+                    url.serialize(), host);
+                log_failure(request, msg);
+                on_complete->function()(false, {}, StringView(msg));
+                return nullptr;
+            }
+        }
+
         dispatch_sshweb_load_request(request, move(on_headers_received), move(on_data_received), move(on_complete));
         return nullptr;
     }

@@ -11,4 +11,4 @@ set(GENERATED_SOURCES
 )
 
 ladybird_lib(LibSSHWebClient sshwebclient)
-target_link_libraries(LibSSHWebClient PUBLIC LibCore LibIPC LibURL)
+target_link_libraries(LibSSHWebClient PUBLIC LibCore LibIPC LibSSHWeb LibURL)

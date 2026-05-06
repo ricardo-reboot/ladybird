@@ -5,7 +5,9 @@
  */
 
 #include <AK/Format.h>
+#include <AK/NonnullRefPtr.h>
 #include <LibSSHWebClient/Client.h>
+#include <LibSSHWeb/Manifest.h>
 
 namespace SSHWebClient {
 
@@ -50,6 +52,52 @@ void Client::request_chunk(u64 request_id, ByteBuffer data, bool is_final)
         if (on_complete)
             on_complete(move(bytes));
     }
+}
+
+void Client::fetch_capabilities_async(URL::URL const& origin_url)
+{
+    if (m_manifest.has_value() || m_capabilities_fetch_in_flight)
+        return;
+    m_capabilities_fetch_in_flight = true;
+    // Capture a strong ref so the lambda is safe even if the caller drops its
+    // reference before the capabilities response arrives.
+    NonnullRefPtr<Client> self = *this;
+    execute(origin_url, "capabilities", [self](ErrorOr<ByteBuffer> result) mutable {
+        self->m_capabilities_fetch_in_flight = false;
+        if (result.is_error()) {
+            dbgln("[SSHWebClient] capabilities fetch failed: {}", result.error());
+            return;
+        }
+        auto raw = result.release_value();
+        auto parsed = SSHWeb::CapabilitiesManifest::parse(StringView { raw.bytes() });
+        if (parsed.is_error()) {
+            dbgln("[SSHWebClient] capabilities parse failed: {}", parsed.error());
+            return;
+        }
+        self->m_manifest = parsed.release_value();
+        auto allow_count = self->m_manifest->proxy_cache.has_value()
+            ? self->m_manifest->proxy_cache->allow.size()
+            : 0u;
+        dbgln("[SSHWebClient] manifest loaded: site={}, proxy-cache.allow={} host(s)",
+            self->m_manifest->site.name, allow_count);
+    });
+}
+
+bool Client::is_host_allowlisted(StringView host) const
+{
+    if (!m_manifest.has_value())
+        return false;
+    if (!m_manifest->proxy_cache.has_value())
+        return false;
+    for (auto const& allowed : m_manifest->proxy_cache->allow) {
+        auto allowed_view = allowed.bytes_as_string_view();
+        if (allowed_view == host)
+            return true;
+        // Subdomain match: "foo.fonts.googleapis.com" matches "fonts.googleapis.com"
+        if (host.ends_with(allowed_view) && host.length() > allowed_view.length() && host[host.length() - allowed_view.length() - 1] == '.')
+            return true;
+    }
+    return false;
 }
 
 void Client::request_finished(u64 request_id, ByteString error)
