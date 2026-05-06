@@ -13,6 +13,7 @@
 #include <AK/NonnullOwnPtr.h>
 #include <LibGC/Root.h>
 #include <WebContent/Forward.h>
+#include <WebContent/PageClient.h>
 
 namespace WebContent {
 
@@ -27,6 +28,20 @@ public:
     Optional<PageClient&> page(u64 index);
     PageClient& create_page();
     void remove_page(Badge<PageClient>, u64 index);
+
+    template<typename Callback>
+    void for_each_page(Callback callback)
+    {
+        for (auto& [id, page] : m_pages)
+            callback(*page);
+    }
+
+    template<typename Callback>
+    void for_each_page(Callback callback) const
+    {
+        for (auto const& [id, page] : m_pages)
+            callback(*page);
+    }
 
     ConnectionFromClient& client() const { return m_client; }
 

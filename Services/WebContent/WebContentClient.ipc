@@ -138,5 +138,11 @@ endpoint WebContentClient
 
     did_find_in_page(u64 page_id, size_t current_match_index, Optional<size_t> total_match_count) =|
 
+    did_sshweb_manifest_load(u64 page_id, String site_name) =|
+
+    // === Plan 7B TOFU ===
+    did_sshweb_tofu_prompt(u64 page_id, u64 prompt_id, ByteString host, u16 port, ByteString key_type, ByteString fingerprint_sha256) =|
+    // === End Plan 7B TOFU ===
+
     request_worker_agent(u64 page_id, Web::Bindings::AgentType worker_type) => (IPC::TransportHandle handle, IPC::TransportHandle request_server_handle, IPC::TransportHandle image_decoder_handle) // FIXME: Add required attributes to select a SharedWorker Agent
 }

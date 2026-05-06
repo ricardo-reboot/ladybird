@@ -878,4 +878,24 @@ Optional<ViewImplementation&> WebContentClient::view_for_page_id(u64 page_id, So
     return {};
 }
 
+void WebContentClient::did_sshweb_manifest_load(u64 page_id, String site_name)
+{
+    if (auto view = view_for_page_id(page_id); view.has_value()) {
+        if (view->on_sshweb_manifest_ready)
+            view->on_sshweb_manifest_ready(site_name);
+    }
+}
+
+// === Plan 7B TOFU ===
+void WebContentClient::did_sshweb_tofu_prompt(u64 page_id, u64 prompt_id, ByteString host, u16 port, ByteString key_type, ByteString fingerprint_sha256)
+{
+    if (auto view = view_for_page_id(page_id); view.has_value()) {
+        if (view->on_tofu_prompt)
+            view->on_tofu_prompt(prompt_id, String::from_byte_string(host).release_value_but_fixme_should_propagate_errors(), port,
+                String::from_byte_string(key_type).release_value_but_fixme_should_propagate_errors(),
+                String::from_byte_string(fingerprint_sha256).release_value_but_fixme_should_propagate_errors());
+    }
+}
+// === End Plan 7B TOFU ===
+
 }

@@ -196,6 +196,10 @@ static NSInteger autocomplete_suggestion_index(NSString* suggestion_text, Vector
     bool m_fullscreen_requested_for_web_content;
     bool m_fullscreen_exit_was_ui_initiated;
     bool m_fullscreen_should_restore_tab_bar;
+
+    // SSH-Web indicator state
+    NSString* _ssh_web_site_name;   // nil when not on an ssh-web:// origin
+    NSButton* _identity_button;     // shown only on ssh-web:// origins (7C stub)
 }
 
 @property (nonatomic, assign) BOOL already_requested_close;
@@ -319,6 +323,11 @@ static NSInteger autocomplete_suggestion_index(NSString* suggestion_text, Vector
     [[self tab].web_view loadURL:url];
 }
 
+- (LocationSearchField*)locationSearchField
+{
+    return (LocationSearchField*)[self.location_toolbar_item view];
+}
+
 - (void)onLoadStart:(URL::URL const&)url isRedirect:(BOOL)isRedirect
 {
     [self setLocationFieldText:url.serialize()];
@@ -326,6 +335,12 @@ static NSInteger autocomplete_suggestion_index(NSString* suggestion_text, Vector
 
 - (void)onURLChange:(URL::URL const&)url
 {
+    // If the new URL is not ssh-web://, ensure the indicator is cleared.
+    // (It should already be cleared by onLoadStart, but handle in-page
+    // fragment navigations and redirects too.)
+    if (url.scheme() != "ssh-web"sv && _ssh_web_site_name != nil)
+        [self clearSSHWebIndicator];
+
     [self setLocationFieldText:url.serialize()];
 
     // Don't steal focus from the location bar when loading the new tab page
@@ -367,6 +382,53 @@ static NSInteger autocomplete_suggestion_index(NSString* suggestion_text, Vector
     [self.window makeFirstResponder:[self tab].web_view];
 }
 
+- (void)onSSHWebManifestLoaded:(NSString*)siteName
+{
+    _ssh_web_site_name = [siteName copy];
+
+    auto* field = [self locationSearchField];
+    if (field == nil)
+        return;
+
+    // Subtle teal tint: #e5f4f1 ≈ R:0.898 G:0.957 B:0.945
+    [field setBackgroundColor:[NSColor colorWithRed:0.898 green:0.957 blue:0.945 alpha:1.0]];
+
+    // Re-apply the pill to the current URL string already in the field.
+    auto const& url = [[[self tab] web_view] view].url();
+    if (url.scheme() == "ssh-web"sv)
+        [self setLocationFieldText:url.serialize()];
+
+    // Show identity button stub (7C).
+    if (_identity_button != nil)
+        [_identity_button setHidden:NO];
+}
+
+- (void)clearSSHWebIndicator
+{
+    _ssh_web_site_name = nil;
+
+    auto* field = [self locationSearchField];
+    if (field != nil)
+        [field setBackgroundColor:[NSColor controlBackgroundColor]];
+
+    if (_identity_button != nil)
+        [_identity_button setHidden:YES];
+}
+
+- (IBAction)showIdentitySwitcher:(id)sender
+{
+    // 7C stub — the popover will be implemented in plan 7C.
+    (void)sender;
+}
+
+// === Plan 7B TOFU ===
+- (void)sendTOFUDecision:(u64)promptId accepted:(BOOL)accepted permanent:(BOOL)permanent
+{
+    auto& view = [[self tab].web_view view];
+    view.send_tofu_decision(promptId, accepted, permanent);
+}
+// === End Plan 7B TOFU ===
+
 #pragma mark - Private methods
 
 - (Tab*)tab
@@ -389,6 +451,19 @@ static NSInteger autocomplete_suggestion_index(NSString* suggestion_text, Vector
 
 - (void)setLocationFieldText:(StringView)url
 {
+    // The location field's displayed string includes the "SSH-Web · <site>  "
+    // pill we prepend below. When AppKit rebroadcasts the field value back to
+    // us (focus/blur, controlTextDidEndEditing), the pill comes along for the
+    // ride and would be prefixed again on the next call. Strip it before
+    // building the new attributed string.
+    if (_ssh_web_site_name != nil) {
+        auto* pill_prefix = [NSString stringWithFormat:@"SSH-Web · %@  ", _ssh_web_site_name];
+        auto pill_bytes = [pill_prefix UTF8String];
+        StringView pill_view { pill_bytes, strlen(pill_bytes) };
+        while (url.starts_with(pill_view))
+            url = url.substring_view(pill_view.length());
+    }
+
     NSMutableAttributedString* attributed_url;
 
     auto* dark_attributes = @{
@@ -422,8 +497,25 @@ static NSInteger autocomplete_suggestion_index(NSString* suggestion_text, Vector
                 attributes:highlight_attributes];
     }
 
+    // Prepend "SSH-Web · <site>" pill when on an ssh-web:// origin.
+    if (_ssh_web_site_name != nil) {
+        auto* pill_attributes = @{
+            NSForegroundColorAttributeName : [NSColor colorWithRed:0.0 green:0.45 blue:0.40 alpha:1.0],
+            NSFontAttributeName : [NSFont systemFontOfSize:[NSFont systemFontSize] weight:NSFontWeightSemibold],
+        };
+        auto* pill_text = [NSString stringWithFormat:@"SSH-Web · %@  ", _ssh_web_site_name];
+        auto* pill = [[NSAttributedString alloc] initWithString:pill_text attributes:pill_attributes];
+        [attributed_url insertAttributedString:pill atIndex:0];
+    }
+
     auto* location_search_field = (LocationSearchField*)[self.location_toolbar_item view];
     [location_search_field setAttributedStringValue:attributed_url];
+
+    // Re-apply tint each time the field is rewritten — AppKit's NSSearchField
+    // sometimes resets backgroundColor across redraws, which would otherwise
+    // strip the indicator on intra-origin navigation.
+    if (_ssh_web_site_name != nil)
+        [location_search_field setBackgroundColor:[NSColor colorWithRed:0.898 green:0.957 blue:0.945 alpha:1.0]];
 }
 
 - (NSString*)currentLocationFieldQuery
@@ -694,6 +786,8 @@ static NSInteger autocomplete_suggestion_index(NSString* suggestion_text, Vector
         if (@available(macOS 26, *)) {
             [location_search_field setBordered:YES];
         }
+
+        // Identity switcher button placeholder (Plan 7C will wire it up).
 
         _location_toolbar_item = [[NSToolbarItem alloc] initWithItemIdentifier:TOOLBAR_LOCATION_IDENTIFIER];
         [_location_toolbar_item setView:location_search_field];
@@ -1001,6 +1095,24 @@ static NSInteger autocomplete_suggestion_index(NSString* suggestion_text, Vector
 
     [self navigateToLocation:move(location)];
     return YES;
+}
+
+- (void)controlTextDidBeginEditing:(NSNotification*)notification
+{
+    // The "SSH-Web · <site>  " pill is presentational only; show the user the
+    // clean editable URL when the field gains focus. controlTextDidEndEditing
+    // re-applies the pill on blur via setLocationFieldText.
+    if (_ssh_web_site_name == nil)
+        return;
+    auto* field = (LocationSearchField*)[self.location_toolbar_item view];
+    auto* current = [field stringValue];
+    auto* pill_prefix = [NSString stringWithFormat:@"SSH-Web · %@  ", _ssh_web_site_name];
+    while ([current hasPrefix:pill_prefix])
+        current = [current substringFromIndex:[pill_prefix length]];
+    if (![current isEqualToString:[field stringValue]]) {
+        [field setStringValue:current];
+        [[field currentEditor] selectAll:nil];
+    }
 }
 
 - (void)controlTextDidEndEditing:(NSNotification*)notification

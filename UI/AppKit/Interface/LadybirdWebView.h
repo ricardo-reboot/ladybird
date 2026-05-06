@@ -39,6 +39,21 @@
 - (void)onFindInPageResult:(size_t)current_match_index
            totalMatchCount:(Optional<size_t> const&)total_match_count;
 
+// Called when an ssh-web:// capabilities manifest is available.
+// siteName is the human-readable site name from the manifest.
+// Pass nil to clear the SSH-Web indicator (e.g. on navigation away).
+- (void)onSSHWebManifestLoaded:(NSString*)siteName;
+
+// === Plan 7B TOFU ===
+// Called when SSHWebServer encounters an unknown host key. The observer must
+// call -[TabController sendTOFUDecision:accepted:permanent:] exactly once.
+- (void)onTOFUPrompt:(u64)promptId
+                host:(NSString*)host
+                port:(uint16_t)port
+             keyType:(NSString*)keyType
+         fingerprint:(NSString*)fingerprint;
+// === End Plan 7B TOFU ===
+
 @end
 
 @interface LadybirdWebView : NSView <NSMenuDelegate, NSTextInputClient>

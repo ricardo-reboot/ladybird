@@ -32,4 +32,16 @@
 - (void)focusWebView;
 - (void)focusLocationToolbarItem;
 
+// SSH-Web address bar indicator — called by Tab when a manifest arrives.
+- (void)onSSHWebManifestLoaded:(NSString*)siteName;
+// Clear tint + pill — called on new navigation start.
+- (void)clearSSHWebIndicator;
+// Stub entry point for the identity switcher popover (implemented in 7C).
+- (IBAction)showIdentitySwitcher:(id)sender;
+
+// === Plan 7B TOFU ===
+// Send the user's TOFU decision back through the IPC chain to SSHWebServer.
+- (void)sendTOFUDecision:(u64)promptId accepted:(BOOL)accepted permanent:(BOOL)permanent;
+// === End Plan 7B TOFU ===
+
 @end

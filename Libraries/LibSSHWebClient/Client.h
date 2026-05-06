@@ -38,7 +38,8 @@ public:
 
     // Issue a command against an ssh-web:// URL. on_complete is invoked
     // exactly once with the accumulated response bytes or an error.
-    void execute(URL::URL const& url, ByteString command, OnComplete on_complete);
+    // page_id is recorded so that on_tofu_prompt can target the right UI window.
+    void execute(URL::URL const& url, ByteString command, OnComplete on_complete, u64 page_id = 0);
 
     // Capabilities manifest — populated after connect via set_manifest().
     void set_manifest(SSHWeb::CapabilitiesManifest manifest) { m_manifest = move(manifest); }
@@ -55,6 +56,17 @@ public:
     // treat this conservatively (block the request).
     bool is_host_allowlisted(StringView host) const;
 
+    // Called once (on the IPC thread) after fetch_capabilities_async() receives
+    // and stores the manifest. Set this before calling fetch_capabilities_async().
+    Function<void(SSHWeb::CapabilitiesManifest const&)> on_manifest_ready;
+
+    // === Plan 7B TOFU ===
+    // Fired when the server sends a tofu_prompt. The WebContent glue sets this
+    // to route the prompt to the UI process for user interaction.
+    // Signature: (page_id, prompt_id, host, port, key_type, fingerprint_sha256)
+    Function<void(u64, u64, ByteString, u16, ByteString, ByteString)> on_tofu_prompt;
+    // === End Plan 7B TOFU ===
+
 private:
     // SSHWebClientEndpoint overrides — called by the server back at us.
     virtual void tofu_prompt(u64 prompt_id, ByteString host, u16 port, ByteString key_type, ByteString fingerprint_sha256) override;
@@ -64,10 +76,12 @@ private:
     struct PendingRequest {
         ByteBuffer accumulated;
         OnComplete on_complete;
+        u64 page_id { 0 };
     };
 
     HashMap<u64, PendingRequest> m_pending;
     u64 m_next_request_id { 1 };
+    u64 m_last_page_id { 0 };   // page_id of the most recent execute() call
     Optional<SSHWeb::CapabilitiesManifest> m_manifest;
     bool m_capabilities_fetch_in_flight { false };
 };

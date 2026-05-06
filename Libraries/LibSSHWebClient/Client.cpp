@@ -18,20 +18,28 @@ Client::Client(NonnullOwnPtr<IPC::Transport> transport)
 
 Client::~Client() = default;
 
-void Client::execute(URL::URL const& url, ByteString command, OnComplete on_complete)
+void Client::execute(URL::URL const& url, ByteString command, OnComplete on_complete, u64 page_id)
 {
     auto request_id = m_next_request_id++;
-    m_pending.set(request_id, PendingRequest { .accumulated = {}, .on_complete = move(on_complete) });
+    m_last_page_id = page_id;
+    m_pending.set(request_id, PendingRequest { .accumulated = {}, .on_complete = move(on_complete), .page_id = page_id });
     IPCProxy::async_start_request(request_id, url, move(command));
 }
 
+// === Plan 7B TOFU ===
 void Client::tofu_prompt(u64 prompt_id, ByteString host, u16 port, ByteString key_type, ByteString fingerprint_sha256)
 {
-    // Plan 5 simplification: auto-accept. Plan 7 will route this to a real
-    // UI dialog in the AppKit / Qt UI process.
-    dbgln("[SSHWebClient] auto-accepting host key for {}:{} ({} {})", host, port, key_type, fingerprint_sha256);
-    IPCProxy::async_tofu_decision(prompt_id, true);
+    dbgln("[SSHWebClient] tofu_prompt for {}:{} ({} {})", host, port, key_type, fingerprint_sha256);
+    if (on_tofu_prompt) {
+        // Route to UI process via the callback set by WebContent/main.cpp.
+        on_tofu_prompt(m_last_page_id, prompt_id, move(host), port, move(key_type), move(fingerprint_sha256));
+    } else {
+        // Fallback: auto-accept (should not happen in production with UI wired up).
+        dbgln("[SSHWebClient] no on_tofu_prompt handler — auto-accepting");
+        IPCProxy::async_tofu_decision(prompt_id, true, true);
+    }
 }
+// === End Plan 7B TOFU ===
 
 void Client::request_chunk(u64 request_id, ByteBuffer data, bool is_final)
 {
@@ -80,6 +88,8 @@ void Client::fetch_capabilities_async(URL::URL const& origin_url)
             : 0u;
         dbgln("[SSHWebClient] manifest loaded: site={}, proxy-cache.allow={} host(s)",
             self->m_manifest->site.name, allow_count);
+        if (self->on_manifest_ready)
+            self->on_manifest_ready(*self->m_manifest);
     });
 }
 

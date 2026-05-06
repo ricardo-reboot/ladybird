@@ -17,6 +17,7 @@
 #import <Interface/SearchPanel.h>
 #import <Interface/Tab.h>
 #import <Interface/TabController.h>
+#import <Interface/TOFUSheetController.h>
 #import <Utilities/Conversions.h>
 
 #if !__has_feature(objc_arc)
@@ -263,6 +264,8 @@ static constexpr CGFloat const WINDOW_HEIGHT = 800;
     self.favicon = [Tab defaultFavicon];
     [self updateTabTitleAndFavicon];
 
+    // Clear any SSH-Web indicator when a new navigation begins.
+    [[self tabController] clearSSHWebIndicator];
     [[self tabController] onLoadStart:url isRedirect:is_redirect];
 }
 
@@ -342,5 +345,29 @@ static constexpr CGFloat const WINDOW_HEIGHT = 800;
     [self.search_panel onFindInPageResult:current_match_index
                           totalMatchCount:total_match_count];
 }
+
+- (void)onSSHWebManifestLoaded:(NSString*)siteName
+{
+    [[self tabController] onSSHWebManifestLoaded:siteName];
+}
+
+// === Plan 7B TOFU ===
+- (void)onTOFUPrompt:(u64)promptId
+                host:(NSString*)host
+                port:(uint16_t)port
+             keyType:(NSString*)keyType
+         fingerprint:(NSString*)fingerprint
+{
+    auto* sheet = [[TOFUSheetController alloc] initWithHost:host
+                                                       port:port
+                                                    keyType:keyType
+                                                fingerprint:fingerprint];
+    [sheet presentOnWindow:self completion:^(int decision) {
+        bool accepted  = (decision != 0);
+        bool permanent = (decision == 2);
+        [[self tabController] sendTOFUDecision:promptId accepted:accepted permanent:permanent];
+    }];
+}
+// === End Plan 7B TOFU ===
 
 @end
