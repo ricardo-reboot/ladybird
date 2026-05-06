@@ -43,12 +43,17 @@ struct ManifestMCP {
     Vector<ManifestMCPTool> tools;
 };
 
+struct ManifestProxyCache {
+    Vector<String> allow; // hostnames, e.g. "fonts.googleapis.com"
+};
+
 struct CapabilitiesManifest {
     String protocol;
     ManifestSite site;
     Vector<ManifestCommand> commands;
     ManifestAuth auth;
     Optional<ManifestMCP> mcp;
+    Optional<ManifestProxyCache> proxy_cache;
 
     static ErrorOr<CapabilitiesManifest> parse(StringView json);
     ErrorOr<String> serialize() const;

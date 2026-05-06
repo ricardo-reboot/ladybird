@@ -78,11 +78,19 @@ ErrorOr<CapabilitiesManifest> CapabilitiesManifest::parse(StringView json)
         command.name = name;
         command.description = optional_string(command_obj, "description"sv);
         if (auto routes = command_obj.get("routes"sv); routes.has_value()) {
-            auto parsed = parse_string_array(*routes);
-            if (parsed.is_error()) { command_error = parsed.release_error(); return; }
-            command.routes = parsed.release_value();
+            // Tolerate either array (e.g. receive-pack: ["/", "/about"]) or object
+            // (e.g. api-call: {"GET /api/posts": {...}}). For the object form, harvest the keys.
+            if (routes->is_array()) {
+                auto parsed = parse_string_array(*routes);
+                if (parsed.is_error()) { command_error = parsed.release_error(); return; }
+                command.routes = parsed.release_value();
+            } else if (routes->is_object()) {
+                routes->as_object().for_each_member([&](StringView key, JsonValue const&) {
+                    command.routes.append(MUST(String::from_utf8(key)));
+                });
+            }
         }
-        if (auto supports = command_obj.get("supports"sv); supports.has_value()) {
+        if (auto supports = command_obj.get("supports"sv); supports.has_value() && supports->is_array()) {
             auto parsed = parse_string_array(*supports);
             if (parsed.is_error()) { command_error = parsed.release_error(); return; }
             command.supports = parsed.release_value();
@@ -100,6 +108,21 @@ ErrorOr<CapabilitiesManifest> CapabilitiesManifest::parse(StringView json)
         manifest.auth.modes = TRY(parse_string_array(*modes));
     if (auto key_types = auth_obj.get("key-types"sv); key_types.has_value())
         manifest.auth.key_types = TRY(parse_string_array(*key_types));
+
+    // Parse proxy-cache allowlist from commands["proxy-call"]["allowed-origins"].
+    // The server serializes this as part of the commands object (not a top-level key).
+    if (commands_value.has_value() && commands_value->is_object()) {
+        if (auto proxy_call = commands_value->as_object().get("proxy-call"sv); proxy_call.has_value() && proxy_call->is_object()) {
+            if (auto allowed = proxy_call->as_object().get("allowed-origins"sv); allowed.has_value() && allowed->is_array()) {
+                ManifestProxyCache pc;
+                for (auto const& element : allowed->as_array().values()) {
+                    if (element.is_string())
+                        pc.allow.append(element.as_string());
+                }
+                manifest.proxy_cache = move(pc);
+            }
+        }
+    }
 
     if (auto mcp_value = root.get("mcp"sv); mcp_value.has_value() && mcp_value->is_object()) {
         auto const& mcp_obj = mcp_value->as_object();
