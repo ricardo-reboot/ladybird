@@ -7,6 +7,7 @@
 #include <LibWebView/Application.h>
 #include <LibWebView/Autocomplete.h>
 #include <LibWebView/BookmarkStore.h>
+#include <LibURL/Parser.h>
 #include <LibWebView/URL.h>
 #include <LibWebView/ViewImplementation.h>
 
@@ -31,6 +32,7 @@ static NSString* const TOOLBAR_ZOOM_IDENTIFIER = @"ToolbarZoomIdentifier";
 static NSString* const TOOLBAR_BOOKMARK_IDENTIFIER = @"ToolbarBookmarkIdentifier";
 static NSString* const TOOLBAR_NEW_TAB_IDENTIFIER = @"ToolbarNewTabIdentifier";
 static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIdentifier";
+static NSString* const TOOLBAR_IDENTITY_IDENTIFIER = @"ToolbarIdentityIdentifier";
 
 static NSString* candidate_by_trimming_root_trailing_slash(NSString* candidate);
 
@@ -217,6 +219,7 @@ static NSInteger autocomplete_suggestion_index(NSString* suggestion_text, Vector
 @property (nonatomic, strong) NSToolbarItem* bookmark_toolbar_item;
 @property (nonatomic, strong) NSToolbarItem* new_tab_toolbar_item;
 @property (nonatomic, strong) NSToolbarItem* tab_overview_toolbar_item;
+@property (nonatomic, strong) NSToolbarItem* identity_toolbar_item;
 
 @property (nonatomic, strong) Autocomplete* autocomplete;
 @property (nonatomic, copy) NSString* current_inline_autocomplete_suggestion;
@@ -246,6 +249,7 @@ static NSInteger autocomplete_suggestion_index(NSString* suggestion_text, Vector
 @synthesize bookmark_toolbar_item = _bookmark_toolbar_item;
 @synthesize new_tab_toolbar_item = _new_tab_toolbar_item;
 @synthesize tab_overview_toolbar_item = _tab_overview_toolbar_item;
+@synthesize identity_toolbar_item = _identity_toolbar_item;
 
 - (instancetype)init
 {
@@ -848,6 +852,28 @@ static NSInteger autocomplete_suggestion_index(NSString* suggestion_text, Vector
     return _tab_overview_toolbar_item;
 }
 
+- (NSToolbarItem*)identity_toolbar_item
+{
+    if (!_identity_toolbar_item) {
+        auto* button = [self create_button:NSImageNameUserAccounts
+                               with_action:@selector(showIdentityDialog:)
+                              with_tooltip:@"SSH-Web identities"];
+
+        _identity_toolbar_item = [[NSToolbarItem alloc] initWithItemIdentifier:TOOLBAR_IDENTITY_IDENTIFIER];
+        [_identity_toolbar_item setView:button];
+    }
+
+    return _identity_toolbar_item;
+}
+
+- (IBAction)showIdentityDialog:(id)sender
+{
+    (void)sender;
+    auto url = URL::Parser::basic_parse("about:sshweb-identities"sv);
+    if (url.has_value())
+        [[self tab].web_view loadURL:url.value()];
+}
+
 - (NSArray*)toolbar_identifiers
 {
     if (!_toolbar_identifiers) {
@@ -858,6 +884,7 @@ static NSInteger autocomplete_suggestion_index(NSString* suggestion_text, Vector
             TOOLBAR_RELOAD_IDENTIFIER,
             TOOLBAR_LOCATION_IDENTIFIER,
             TOOLBAR_BOOKMARK_IDENTIFIER,
+            TOOLBAR_IDENTITY_IDENTIFIER,
             TOOLBAR_ZOOM_IDENTIFIER,
             NSToolbarFlexibleSpaceItemIdentifier,
             TOOLBAR_NEW_TAB_IDENTIFIER,
@@ -1040,6 +1067,9 @@ static NSInteger autocomplete_suggestion_index(NSString* suggestion_text, Vector
     }
     if ([identifier isEqual:TOOLBAR_TAB_OVERVIEW_IDENTIFIER]) {
         return self.tab_overview_toolbar_item;
+    }
+    if ([identifier isEqual:TOOLBAR_IDENTITY_IDENTIFIER]) {
+        return self.identity_toolbar_item;
     }
 
     return nil;
