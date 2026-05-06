@@ -252,6 +252,29 @@ ErrorOr<NonnullRefPtr<Requests::RequestClient>> launch_request_server_process()
     return client;
 }
 
+#ifdef LADYBIRD_ENABLE_SSHWEB
+ErrorOr<NonnullRefPtr<SSHWebClient::Client>> launch_sshweb_server_process()
+{
+    Vector<ByteString> arguments;
+    arguments.append("--service"sv);
+
+    if (auto server = mach_server_name(); server.has_value()) {
+        arguments.append("--mach-server-name"sv);
+        arguments.append(server.value());
+    }
+
+    return launch_server_process<SSHWebClient::Client>("SSHWebServer"sv, move(arguments));
+}
+
+ErrorOr<IPC::TransportHandle> connect_new_sshweb_client()
+{
+    auto response = Application::sshweb_server_client().send_sync_but_allow_failure<Messages::SSHWebServer::ConnectNewClient>();
+    if (!response)
+        return Error::from_string_literal("Failed to connect to SSHWebServer");
+    return response->take_handle();
+}
+#endif
+
 ErrorOr<IPC::TransportHandle> connect_new_request_server_client()
 {
     auto response = Application::request_server_client().send_sync_but_allow_failure<Messages::RequestServer::ConnectNewClient>();
