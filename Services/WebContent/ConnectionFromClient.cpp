@@ -63,6 +63,9 @@
 #include <WebContent/PageClient.h>
 #include <WebContent/PageHost.h>
 #include <WebContent/WebContentClientEndpoint.h>
+#ifdef LADYBIRD_ENABLE_SSHWEB
+#    include <LibSSHWebClient/Client.h>
+#endif
 
 namespace WebContent {
 
@@ -1435,6 +1438,12 @@ void ConnectionFromClient::exit_fullscreen(u64 page_id)
         Web::HTML::TemporaryExecutionContext context(page->page().top_level_browsing_context().active_document()->realm(), Web::HTML::TemporaryExecutionContext::CallbacksEnabled::Yes);
         page->page().top_level_browsing_context().active_document()->fully_exit_fullscreen();
     }
+}
+
+void ConnectionFromClient::sshweb_tofu_decision(u64 prompt_id, bool accepted, bool permanent)
+{
+    // Plan 7B will wire this through to the SSHWebClient::Client.
+    (void)prompt_id; (void)accepted; (void)permanent;
 }
 
 }

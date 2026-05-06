@@ -150,4 +150,9 @@ endpoint WebContentServer
     request_close(u64 page_id) =|
 
     exit_fullscreen(u64 page_id) =|
+
+    // === Plan 7B TOFU ===
+    // Send the user's TOFU decision back to SSHWebServer.
+    sshweb_tofu_decision(u64 prompt_id, bool accepted, bool permanent) =|
+    // === End Plan 7B TOFU ===
 }

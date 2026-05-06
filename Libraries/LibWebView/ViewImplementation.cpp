@@ -556,6 +556,13 @@ void ViewImplementation::select_dropdown_closed(Optional<u32> const& selected_it
     client().async_select_dropdown_closed(page_id(), selected_item_id);
 }
 
+// === Plan 7B TOFU ===
+void ViewImplementation::send_tofu_decision(u64 prompt_id, bool accepted, bool permanent)
+{
+    client().async_sshweb_tofu_decision(prompt_id, accepted, permanent);
+}
+// === End Plan 7B TOFU ===
+
 void ViewImplementation::paste_text_from_clipboard()
 {
     client().async_paste(page_id(), Application::the().clipboard_text());

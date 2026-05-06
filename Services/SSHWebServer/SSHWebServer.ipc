@@ -14,5 +14,7 @@ endpoint SSHWebServer
     stop_request(u64 request_id) => (bool success)
 
     // Response to a TOFU prompt previously sent via tofu_prompt.
-    tofu_decision(u64 prompt_id, bool accepted) =|
+    // accepted: whether the user chose to trust the host key.
+    // permanent: if true, persist the key to known_hosts; if false, trust for this session only.
+    tofu_decision(u64 prompt_id, bool accepted, bool permanent) =|
 }

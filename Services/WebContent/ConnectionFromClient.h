@@ -176,6 +176,10 @@ private:
 
     virtual void exit_fullscreen(u64 page_id) override;
 
+    // === Plan 7B TOFU ===
+    virtual void sshweb_tofu_decision(u64 prompt_id, bool accepted, bool permanent) override;
+    // === End Plan 7B TOFU ===
+
     NonnullOwnPtr<PageHost> m_page_host;
 
     HashMap<int, Web::FileRequest> m_requested_files {};

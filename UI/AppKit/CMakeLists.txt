@@ -15,6 +15,7 @@ add_library(ladybird_impl STATIC
     Interface/SearchPanel.mm
     Interface/Tab.mm
     Interface/TabController.mm
+    Interface/TOFUSheetController.mm
     Utilities/Conversions.mm
 )
 target_include_directories(ladybird_impl PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>)

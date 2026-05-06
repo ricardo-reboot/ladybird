@@ -7,9 +7,13 @@
 #pragma once
 
 #include <AK/ByteString.h>
+#include <AK/Function.h>
 #include <AK/HashMap.h>
 #include <LibIPC/ConnectionFromClient.h>
+#include <LibThreading/ConditionVariable.h>
+#include <LibThreading/Mutex.h>
 #include <Services/SSHWebServer/Connection.h>
+#include <Services/SSHWebServer/KnownHosts.h>
 #include <Services/SSHWebServer/SSHWebClientEndpoint.h>
 #include <Services/SSHWebServer/SSHWebServerEndpoint.h>
 
@@ -40,7 +44,7 @@ private:
     virtual Messages::SSHWebServer::ConnectNewClientResponse connect_new_client() override;
     virtual void start_request(u64 request_id, URL::URL url, ByteString command) override;
     virtual Messages::SSHWebServer::StopRequestResponse stop_request(u64 request_id) override;
-    virtual void tofu_decision(u64 prompt_id, bool accepted) override;
+    virtual void tofu_decision(u64 prompt_id, bool accepted, bool permanent) override;
 
     // host:port -> open SSHWeb::Connection. Lazily populated by start_request.
     HashMap<ByteString, NonnullOwnPtr<SSHWeb::Connection>> m_ssh_pool;
@@ -49,6 +53,26 @@ private:
     {
         return ByteString::formatted("{}:{}", host, port);
     }
+
+    // === Plan 7B TOFU ===
+    // One entry per outstanding TOFU prompt. The background thread that called
+    // Connection::open blocks on `cond` waiting for the UI decision.
+    struct PendingTOFU {
+        Threading::Mutex mutex;
+        Threading::ConditionVariable cond { mutex };
+        // Set by tofu_decision() on the IPC thread; read by the background thread.
+        bool resolved { false };
+        bool accepted { false };
+        bool permanent { false };
+        // Host-key details needed to persist the entry if permanent=true.
+        ByteString host;
+        u16 port { 0 };
+        SSHWeb::HostKey key;
+    };
+
+    HashMap<u64, OwnPtr<PendingTOFU>> m_pending_tofu;
+    u64 m_next_prompt_id { 1 };
+    // === End Plan 7B TOFU ===
 };
 
 }

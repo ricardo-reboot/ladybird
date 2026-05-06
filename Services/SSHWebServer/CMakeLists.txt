@@ -27,6 +27,7 @@ target_link_libraries(sshwebservice PUBLIC
     LibIPC
     LibMain
     LibSSHWeb
+    LibThreading
     LibURL
     libssh2::libssh2
 )
