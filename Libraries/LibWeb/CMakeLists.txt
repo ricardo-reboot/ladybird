@@ -1274,10 +1274,10 @@ if (HAS_FONTCONFIG)
 endif()
 
 if (LADYBIRD_ENABLE_SSHWEB)
-    # Plan 5 MVP: link the sshwebservice static library so ResourceLoader can
-    # call SSHWeb::Connection / SSHWeb::KnownHosts directly. Plan 5b should
-    # replace this with an IPC dependency on a SSHWebServer helper process.
-    target_link_libraries(LibWeb PRIVATE sshwebservice)
+    # Plan 5b: async IPC call to the SSHWebServer helper process.
+    # LibSSHWebClient handles the IPC wiring; libssh2 stays in SSHWebServer.
+    # LibSSHWeb provides URL::parse and first_blob_in_packfile (no libssh2 dep).
+    target_link_libraries(LibWeb PRIVATE LibSSHWebClient LibSSHWeb)
     target_compile_definitions(LibWeb PRIVATE LADYBIRD_ENABLE_SSHWEB=1)
 endif()
 

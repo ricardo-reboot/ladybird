@@ -18,6 +18,9 @@
 #include <LibURL/URL.h>
 #include <LibWeb/Forward.h>
 #include <LibWeb/Loader/NavigatorCompatibilityMode.h>
+#ifdef LADYBIRD_ENABLE_SSHWEB
+#    include <LibSSHWebClient/Client.h>
+#endif
 
 namespace Web {
 
@@ -30,6 +33,11 @@ public:
     static ResourceLoader& the();
 
     void set_client(NonnullRefPtr<Requests::RequestClient>);
+
+#ifdef LADYBIRD_ENABLE_SSHWEB
+    // Set before any WebContent processes are launched (called by app init).
+    void set_sshweb_client(SSHWebClient::Client& client) { m_sshweb_client = &client; }
+#endif
 
     using OnHeadersReceived = GC::Function<void(HTTP::HeaderList const& response_headers, Optional<u32> status_code, Optional<String> const& reason_phrase)>;
     using OnDataReceived = GC::Function<void(ReadonlyBytes data)>;
@@ -81,24 +89,13 @@ private:
     void handle_resource_load_request(LoadRequest const& request, ResourceHandler on_resource, ErrorHandler on_error);
 
 #ifdef LADYBIRD_ENABLE_SSHWEB
-public:
-    // Public so the static parse helper in ResourceLoader.cpp can construct it.
-    struct SSHWebLoadResult {
-        u32 status_code { 200 };
-        NonnullRefPtr<HTTP::HeaderList> headers;
-        ByteBuffer body;
-    };
-
-private:
-    // Synchronous in-process ssh-web:// load. Plan 5b will replace this with
-    // an async IPC call to a SSHWebServer helper process.
-    //
-    // For receive-pack (ssh-web:// scheme), status/headers are synthesized.
-    //
-    // For proxy-call (http(s):// scheme), the server emits the upstream HTTP
-    // response in HTTP/1.1 wire format; this method parses it and surfaces
-    // upstream status + Content-Type / Cache-Control / ETag end-to-end.
-    ErrorOr<SSHWebLoadResult> handle_sshweb_load_request(LoadRequest const& request);
+    // Async IPC-based ssh-web:// load. Dispatches to the SSHWebServer helper
+    // process via LibSSHWebClient. Callbacks are invoked asynchronously.
+    void dispatch_sshweb_load_request(
+        LoadRequest const& request,
+        GC::Root<OnHeadersReceived> on_headers_received,
+        GC::Root<OnDataReceived> on_data_received,
+        GC::Root<OnComplete> on_complete);
 #endif
 
     RefPtr<Requests::Request> start_network_request(LoadRequest const&);
@@ -110,6 +107,9 @@ private:
     GC::Heap& m_heap;
     RefPtr<Requests::RequestClient> m_request_client;
     HashTable<NonnullRefPtr<Requests::Request>> m_active_requests;
+#ifdef LADYBIRD_ENABLE_SSHWEB
+    SSHWebClient::Client* m_sshweb_client { nullptr };
+#endif
 
     String m_user_agent;
     String m_platform;

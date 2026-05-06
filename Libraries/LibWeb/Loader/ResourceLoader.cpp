@@ -22,8 +22,6 @@
 #    include <LibWeb/DOM/Document.h>
 #    include <LibWeb/HTML/TraversableNavigable.h>
 #    include <LibWeb/Page/Page.h>
-#    include <Services/SSHWebServer/Connection.h>
-#    include <Services/SSHWebServer/KnownHosts.h>
 #endif
 #include <LibURL/Parser.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Requests.h>
@@ -438,18 +436,7 @@ RefPtr<Requests::Request> ResourceLoader::load(LoadRequest& request, GC::Root<On
     }();
 
     if (request_scheme_is_sshweb || (initiated_from_sshweb && url.scheme().is_one_of("http"sv, "https"sv))) {
-        auto load_result = handle_sshweb_load_request(request);
-        if (load_result.is_error()) {
-            auto error_message = ByteString::formatted("ssh-web: {}", load_result.error());
-            log_failure(request, error_message);
-            on_complete->function()(false, {}, StringView(error_message));
-        } else {
-            auto result = load_result.release_value();
-            log_success(request);
-            on_headers_received->function()(result.headers, result.status_code, {});
-            on_data_received->function()(result.body.bytes());
-            on_complete->function()(true, {}, {});
-        }
+        dispatch_sshweb_load_request(request, move(on_headers_received), move(on_data_received), move(on_complete));
         return nullptr;
     }
 #endif
@@ -574,7 +561,13 @@ void ResourceLoader::finish_network_request(NonnullRefPtr<Requests::Request> pro
 // emitted by sshttpd's proxy-call binary form. We only need a small subset
 // of HTTP/1.1 — single-message, no chunked transfer encoding (sshttpd writes
 // Content-Length explicitly), no trailers.
-static ErrorOr<ResourceLoader::SSHWebLoadResult> parse_sshweb_proxy_response(ByteBuffer&& raw)
+struct SSHWebProxyResult {
+    u32 status_code { 200 };
+    NonnullRefPtr<HTTP::HeaderList> headers;
+    ByteBuffer body;
+};
+
+static ErrorOr<SSHWebProxyResult> parse_sshweb_proxy_response(ByteBuffer&& raw)
 {
     StringView view { raw };
 
@@ -616,78 +609,117 @@ static ErrorOr<ResourceLoader::SSHWebLoadResult> parse_sshweb_proxy_response(Byt
     }
 
     auto body = TRY(ByteBuffer::copy(body_view.bytes()));
-    return ResourceLoader::SSHWebLoadResult {
+    return SSHWebProxyResult {
         .status_code = *status_code,
         .headers = headers,
         .body = move(body),
     };
 }
 
-ErrorOr<ResourceLoader::SSHWebLoadResult> ResourceLoader::handle_sshweb_load_request(LoadRequest const& request)
+void ResourceLoader::dispatch_sshweb_load_request(
+    LoadRequest const& request,
+    GC::Root<OnHeadersReceived> on_headers_received,
+    GC::Root<OnDataReceived> on_data_received,
+    GC::Root<OnComplete> on_complete)
 {
-    // Synchronous in-process load. Plan 5b will route through a long-lived
-    // SSHWebServer helper via LibSSHWebClient.
-    //
-    // Two modes selected by request URL scheme:
-    //   - ssh-web://...  → receive-pack <path>; response is a PACK v2 packfile,
-    //                      we extract the first blob and synthesize headers.
-    //   - http(s)://...  → proxy-call GET <full-url>; response is an HTTP/1.1
-    //                      message we parse to surface upstream status +
-    //                      Content-Type / Cache-Control / ETag / etc.
-    //                      end-to-end.
+    if (!m_sshweb_client) {
+        auto error_message = ByteString("ssh-web: SSHWebServer client not available"sv);
+        log_failure(request, error_message);
+        on_complete->function()(false, {}, StringView(error_message));
+        return;
+    }
+
     auto const& request_url = request.url().value();
     bool is_proxy_call = request_url.scheme().is_one_of("http"sv, "https"sv);
 
+    // Resolve origin URL and command BEFORE crossing the IPC boundary —
+    // Page*/Document* must not be captured into the async lambda.
     String origin_url_string;
     if (is_proxy_call) {
         auto page = request.page();
-        if (!page)
-            return Error::from_string_literal("ssh-web proxy-call: no Page on request");
-        auto traversable = page->top_level_traversable();
-        auto document = traversable->active_document();
-        if (!document)
-            return Error::from_string_literal("ssh-web proxy-call: no active document");
+        if (!page) {
+            auto error_message = ByteString("ssh-web proxy-call: no Page on request"sv);
+            log_failure(request, error_message);
+            on_complete->function()(false, {}, StringView(error_message));
+            return;
+        }
+        auto document = page->top_level_traversable()->active_document();
+        if (!document) {
+            auto error_message = ByteString("ssh-web proxy-call: no active document"sv);
+            log_failure(request, error_message);
+            on_complete->function()(false, {}, StringView(error_message));
+            return;
+        }
         origin_url_string = document->url().serialize();
     } else {
         origin_url_string = request_url.serialize();
     }
 
-    auto sshweb_url = TRY(SSHWeb::URL::parse(origin_url_string));
-    auto known_hosts = TRY(SSHWeb::KnownHosts::with_default_root());
-    SSHWeb::TOFUDecisionCallback decision = [](StringView, u16, SSHWeb::HostKey const&) -> bool {
-        return true;
-    };
-
-    auto connection = TRY(SSHWeb::Connection::open(
-        sshweb_url.host.bytes_as_string_view(),
-        sshweb_url.port,
-        known_hosts,
-        move(decision),
-        {}));
-
-    if (is_proxy_call) {
-        auto command = ByteString::formatted("proxy-call GET {}", request_url.serialize());
-        auto raw = TRY(connection->execute_command(command.view()));
-        return parse_sshweb_proxy_response(move(raw));
+    auto sshweb_url_or_error = SSHWeb::URL::parse(origin_url_string);
+    if (sshweb_url_or_error.is_error()) {
+        auto error_message = ByteString("ssh-web: invalid URL"sv);
+        log_failure(request, error_message);
+        on_complete->function()(false, {}, StringView(error_message));
+        return;
     }
 
-    // receive-pack path — synthesize headers ourselves.
-    auto path = sshweb_url.path.is_empty() ? "/"_string : sshweb_url.path;
-    auto command = ByteString::formatted("receive-pack {}", path);
-    auto packfile = TRY(connection->execute_command(command.view()));
-    auto body = TRY(SSHWeb::first_blob_in_packfile(packfile.bytes()));
+    ByteString command;
+    if (is_proxy_call) {
+        command = ByteString::formatted("proxy-call GET {}", request_url.serialize());
+    } else {
+        auto sshweb_url = sshweb_url_or_error.value();
+        auto path = sshweb_url.path.is_empty() ? "/"_string : sshweb_url.path;
+        command = ByteString::formatted("receive-pack {}", path);
+    }
 
-    auto path_view = request_url.serialize_path();
-    StringView mime = Core::guess_mime_type_based_on_filename(path_view);
-    if (mime == "application/octet-stream"sv)
-        mime = "text/html"sv;
-    auto headers = HTTP::HeaderList::create({});
-    headers->append(HTTP::Header::isomorphic_encode("Content-Type"sv, mime));
-    return SSHWebLoadResult {
-        .status_code = 200,
-        .headers = headers,
-        .body = move(body),
-    };
+    // Capture everything by value — the lambda fires asynchronously when
+    // request_finished arrives over IPC. GC::Root keeps the callbacks alive.
+    //
+    // The URL sent to the server MUST be the ssh-web:// origin (carries the
+    // SSH host:port). The actual fetch target is encoded in the command
+    // string ("proxy-call GET https://..."). Sending the http(s) request URL
+    // here would fail the server-side SSHWeb::URL::parse.
+    auto serialized_path = request_url.serialize_path();
+    auto origin_url_for_ipc = URL::Parser::basic_parse(origin_url_string).value();
+    m_sshweb_client->execute(origin_url_for_ipc, move(command),
+        [is_proxy_call, serialized_path = move(serialized_path), on_headers_received, on_data_received, on_complete]
+        (ErrorOr<ByteBuffer> result) mutable {
+            if (result.is_error()) {
+                auto msg = ByteString::formatted("ssh-web: {}", result.error());
+                on_complete->function()(false, {}, StringView(msg));
+                return;
+            }
+            auto raw = result.release_value();
+            if (is_proxy_call) {
+                auto parsed = parse_sshweb_proxy_response(move(raw));
+                if (parsed.is_error()) {
+                    auto msg = ByteString::formatted("ssh-web: {}", parsed.error());
+                    on_complete->function()(false, {}, StringView(msg));
+                    return;
+                }
+                auto r = parsed.release_value();
+                on_headers_received->function()(r.headers, r.status_code, {});
+                on_data_received->function()(r.body.bytes());
+                on_complete->function()(true, {}, {});
+            } else {
+                // receive-pack: extract blob from packfile, synthesize headers.
+                auto blob_or_error = SSHWeb::first_blob_in_packfile(raw.bytes());
+                if (blob_or_error.is_error()) {
+                    auto msg = ByteString::formatted("ssh-web: {}", blob_or_error.error());
+                    on_complete->function()(false, {}, StringView(msg));
+                    return;
+                }
+                auto body = blob_or_error.release_value();
+                StringView mime = Core::guess_mime_type_based_on_filename(serialized_path);
+                if (mime == "application/octet-stream"sv)
+                    mime = "text/html"sv;
+                auto headers = HTTP::HeaderList::create({});
+                headers->append(HTTP::Header::isomorphic_encode("Content-Type"sv, mime));
+                on_headers_received->function()(headers, 200, {});
+                on_data_received->function()(body.bytes());
+                on_complete->function()(true, {}, {});
+            }
+        });
 }
 #endif
 
