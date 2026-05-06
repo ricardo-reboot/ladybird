@@ -154,6 +154,12 @@ void ConnectionFromClient::connect_to_request_server(IPC::TransportHandle handle
         on_request_server_connection(handle);
 }
 
+void ConnectionFromClient::connect_to_sshweb_server(IPC::TransportHandle handle)
+{
+    if (on_sshweb_server_connection)
+        on_sshweb_server_connection(handle);
+}
+
 void ConnectionFromClient::update_system_theme(u64 page_id, Core::AnonymousBuffer theme_buffer)
 {
     auto page = this->page(page_id);

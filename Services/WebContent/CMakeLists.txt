@@ -38,6 +38,10 @@ add_executable(WebContent main.cpp)
 
 target_link_libraries(WebContent PRIVATE webcontentservice LibURL)
 
+if (LADYBIRD_ENABLE_SSHWEB)
+    target_link_libraries(webcontentservice PUBLIC LibSSHWebClient)
+endif()
+
 if(WIN32)
     lagom_windows_bin(WebContent CONSOLE)
 endif()

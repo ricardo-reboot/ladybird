@@ -37,6 +37,9 @@
 #include <LibWebView/Plugins/ImageCodecPlugin.h>
 #include <LibWebView/SiteIsolation.h>
 #include <LibWebView/Utilities.h>
+#ifdef LADYBIRD_ENABLE_SSHWEB
+#    include <LibSSHWebClient/Client.h>
+#endif
 #include <WebContent/ConnectionFromClient.h>
 #include <WebContent/PageClient.h>
 #include <WebContent/WebDriverConnection.h>
@@ -104,6 +107,9 @@ static ErrorOr<void> load_content_filters(StringView config_path);
 
 static ErrorOr<void> connect_to_resource_loader(GC::Heap& heap, IPC::TransportHandle const& handle);
 static ErrorOr<void> connect_to_image_decoder(IPC::TransportHandle const& handle);
+#ifdef LADYBIRD_ENABLE_SSHWEB
+static ErrorOr<void> connect_to_sshweb_server(IPC::TransportHandle const& handle);
+#endif
 
 ErrorOr<int> ladybird_main(Main::Arguments arguments)
 {
@@ -270,6 +276,12 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
         if (auto result = connect_to_image_decoder(handle); result.is_error())
             dbgln("Failed to connect to image decoder: {}", result.error());
     };
+#ifdef LADYBIRD_ENABLE_SSHWEB
+    webcontent_client->on_sshweb_server_connection = [](auto const& handle) {
+        if (auto result = connect_to_sshweb_server(handle); result.is_error())
+            dbgln("Failed to connect to SSHWebServer: {}", result.error());
+    };
+#endif
 
     return event_loop.exec();
 }
@@ -327,3 +339,18 @@ ErrorOr<void> connect_to_image_decoder(IPC::TransportHandle const& handle)
         Web::Platform::ImageCodecPlugin::install(*new WebView::ImageCodecPlugin(move(new_client)));
     return {};
 }
+
+#ifdef LADYBIRD_ENABLE_SSHWEB
+ErrorOr<void> connect_to_sshweb_server(IPC::TransportHandle const& handle)
+{
+    auto transport = TRY(handle.create_transport());
+    auto sshweb_client = TRY(try_make_ref_counted<SSHWebClient::Client>(move(transport)));
+    if (Web::ResourceLoader::is_initialized())
+        Web::ResourceLoader::the().set_sshweb_client(*sshweb_client);
+    // Keep the client alive by storing it in a static — ResourceLoader only
+    // holds a raw pointer (same pattern as ImageCodecPlugin).
+    static RefPtr<SSHWebClient::Client> s_sshweb_client;
+    s_sshweb_client = move(sshweb_client);
+    return {};
+}
+#endif
