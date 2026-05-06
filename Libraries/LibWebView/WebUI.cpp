@@ -9,6 +9,7 @@
 #include <LibWebView/WebContentClient.h>
 #include <LibWebView/WebUI.h>
 #include <LibWebView/WebUI/BookmarksUI.h>
+#include <LibWebView/WebUI/IdentitiesUI.h>
 #include <LibWebView/WebUI/ProcessesUI.h>
 #include <LibWebView/WebUI/SettingsUI.h>
 #include <LibWebView/WebUI/VersionUI.h>
@@ -33,6 +34,8 @@ ErrorOr<RefPtr<WebUI>> WebUI::create(WebContentClient& client, String host)
 
     if (host == "bookmarks"sv)
         web_ui = TRY(create_web_ui<BookmarksUI>(client, move(host)));
+    else if (host == "sshweb-identities"sv)
+        web_ui = TRY(create_web_ui<IdentitiesUI>(client, move(host)));
     else if (host == "processes"sv)
         web_ui = TRY(create_web_ui<ProcessesUI>(client, move(host)));
     else if (host == "settings"sv)

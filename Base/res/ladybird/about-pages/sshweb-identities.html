@@ -1,0 +1,268 @@
+<!doctype html>
+<html>
+    <head>
+        <title>SSH-Web Identities</title>
+        <link rel="stylesheet" type="text/css" href="resource://ladybird/ladybird.css" />
+        <link rel="stylesheet" type="text/css" href="resource://ladybird/about-pages/webui.css" />
+        <style>
+            .warning-banner {
+                background-color: rgba(255, 180, 0, 0.15);
+                border: 1px solid rgba(200, 140, 0, 0.4);
+                border-radius: 6px;
+                padding: 10px 14px;
+                margin-bottom: 16px;
+                font-size: 13px;
+                opacity: 0.85;
+            }
+
+            .identity-list {
+                display: flex;
+                flex-direction: column;
+                gap: 8px;
+            }
+
+            .identity-card {
+                background: var(--card-background-color);
+                border: 1px solid var(--border-color, #ddd);
+                border-radius: 6px;
+                padding: 12px 16px;
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 16px;
+            }
+
+            .identity-info {
+                flex: 1;
+                overflow: hidden;
+            }
+
+            .identity-name {
+                font-weight: 600;
+                font-size: 15px;
+                margin-bottom: 2px;
+            }
+
+            .identity-fingerprint {
+                font-family: monospace;
+                font-size: 12px;
+                opacity: 0.6;
+            }
+
+            .identity-created {
+                font-size: 12px;
+                opacity: 0.5;
+                margin-top: 2px;
+            }
+
+            .delete-btn {
+                background: none;
+                border: 1px solid rgba(200, 60, 60, 0.4);
+                border-radius: 4px;
+                color: rgb(180, 50, 50);
+                padding: 4px 10px;
+                font-size: 13px;
+                cursor: pointer;
+                white-space: nowrap;
+            }
+
+            .delete-btn:hover {
+                background: rgba(200, 60, 60, 0.08);
+            }
+
+            .empty-state {
+                text-align: center;
+                padding: 40px 0;
+                opacity: 0.5;
+                font-size: 14px;
+            }
+
+            .generate-row {
+                display: flex;
+                gap: 10px;
+                align-items: center;
+                margin-top: 20px;
+            }
+
+            .generate-row input[type="text"] {
+                flex: 1;
+            }
+
+            .error-banner {
+                display: none;
+                background-color: rgba(200, 60, 60, 0.12);
+                border: 1px solid rgba(180, 50, 50, 0.35);
+                border-radius: 6px;
+                padding: 10px 14px;
+                margin-top: 12px;
+                font-size: 13px;
+                color: rgb(180, 50, 50);
+            }
+
+            @media (prefers-color-scheme: dark) {
+                :root {
+                    --border-color: #3d3d3d;
+                }
+                .delete-btn {
+                    border-color: rgba(220, 80, 80, 0.35);
+                    color: rgb(220, 100, 100);
+                }
+                .delete-btn:hover {
+                    background: rgba(220, 80, 80, 0.12);
+                }
+            }
+        </style>
+    </head>
+    <body>
+        <header>
+            <picture>
+                <source srcset="resource://icons/128x128/app-browser.png" media="(prefers-color-scheme: dark)" />
+                <img src="resource://icons/128x128/app-browser-dark.png" />
+            </picture>
+            <h1>SSH-Web Identities</h1>
+        </header>
+
+        <div class="warning-banner">
+            &#9888; Keys are stored in plaintext on disk. Encrypted-at-rest is not yet implemented.
+            <!-- TODO: add keychain/passphrase encryption in a future wave -->
+        </div>
+
+        <div class="card">
+            <div class="card-body">
+                <p class="card-group">Your Identities</p>
+
+                <div id="identity-list" class="identity-list">
+                    <div class="empty-state">No identities yet.</div>
+                </div>
+
+                <div class="generate-row">
+                    <input id="new-name" type="text" placeholder="Display name (e.g. Work, Personal)" />
+                    <button id="generate-btn" class="primary-button">Generate New Keypair</button>
+                </div>
+
+                <div id="error-banner" class="error-banner"></div>
+            </div>
+        </div>
+
+        <!-- Confirmation dialog for delete -->
+        <dialog id="confirm-delete-dialog">
+            <div style="padding: 24px; max-width: 360px;">
+                <h3 style="margin-top:0">Delete Identity?</h3>
+                <p id="confirm-delete-text" style="font-size:14px; opacity:0.8"></p>
+                <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:20px;">
+                    <button id="confirm-cancel-btn" class="secondary-button">Cancel</button>
+                    <button id="confirm-delete-btn" style="
+                        background: rgb(180,50,50);
+                        color: white;
+                        border: none;
+                        border-radius: 4px;
+                        padding: 6px 16px;
+                        font-size: 14px;
+                        cursor: pointer;
+                    ">Delete</button>
+                </div>
+            </div>
+        </dialog>
+
+        <script type="module">
+            let identities = [];
+            let pendingDeleteId = null;
+
+            function formatDate(unixSecs) {
+                const d = new Date(unixSecs * 1000);
+                return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+            }
+
+            function renderIdentities() {
+                const list = document.getElementById('identity-list');
+                list.innerHTML = '';
+
+                if (identities.length === 0) {
+                    list.innerHTML = '<div class="empty-state">No identities yet. Generate one below.</div>';
+                    return;
+                }
+
+                for (const ident of identities) {
+                    const card = document.createElement('div');
+                    card.className = 'identity-card';
+
+                    const info = document.createElement('div');
+                    info.className = 'identity-info';
+
+                    const nameEl = document.createElement('div');
+                    nameEl.className = 'identity-name';
+                    nameEl.textContent = ident.name;
+
+                    const fpEl = document.createElement('div');
+                    fpEl.className = 'identity-fingerprint';
+                    fpEl.textContent = 'SHA-256: ' + ident.fingerprint;
+
+                    const createdEl = document.createElement('div');
+                    createdEl.className = 'identity-created';
+                    createdEl.textContent = 'Created ' + formatDate(ident.created_at);
+
+                    info.appendChild(nameEl);
+                    info.appendChild(fpEl);
+                    info.appendChild(createdEl);
+
+                    const delBtn = document.createElement('button');
+                    delBtn.className = 'delete-btn';
+                    delBtn.textContent = 'Delete';
+                    delBtn.addEventListener('click', () => startDelete(ident));
+
+                    card.appendChild(info);
+                    card.appendChild(delBtn);
+                    list.appendChild(card);
+                }
+            }
+
+            function startDelete(ident) {
+                pendingDeleteId = ident.id;
+                document.getElementById('confirm-delete-text').textContent =
+                    `Permanently delete "${ident.name}"? This cannot be undone.`;
+                document.getElementById('confirm-delete-dialog').showModal();
+            }
+
+            document.getElementById('confirm-cancel-btn').addEventListener('click', () => {
+                pendingDeleteId = null;
+                document.getElementById('confirm-delete-dialog').close();
+            });
+
+            document.getElementById('confirm-delete-btn').addEventListener('click', () => {
+                if (pendingDeleteId) {
+                    ladybird.sendMessage('deleteIdentity', pendingDeleteId);
+                    pendingDeleteId = null;
+                }
+                document.getElementById('confirm-delete-dialog').close();
+            });
+
+            document.getElementById('generate-btn').addEventListener('click', () => {
+                const nameInput = document.getElementById('new-name');
+                const name = nameInput.value.trim();
+                if (!name) {
+                    nameInput.focus();
+                    return;
+                }
+                document.getElementById('error-banner').style.display = 'none';
+                ladybird.sendMessage('createIdentity', name);
+                nameInput.value = '';
+            });
+
+            document.addEventListener('WebUILoaded', () => {
+                ladybird.sendMessage('loadIdentities');
+            });
+
+            document.addEventListener('WebUIMessage', (event) => {
+                const { name, data } = event.detail;
+                if (name === 'renderIdentities') {
+                    identities = data;
+                    renderIdentities();
+                } else if (name === 'identityError') {
+                    const banner = document.getElementById('error-banner');
+                    banner.textContent = 'Error: ' + (data.error ?? 'unknown error');
+                    banner.style.display = 'block';
+                }
+            });
+        </script>
+    </body>
+</html>

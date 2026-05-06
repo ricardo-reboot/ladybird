@@ -12,6 +12,7 @@ set(SOURCES
     FileDownloader.cpp
     HeadlessWebView.cpp
     HistoryStore.cpp
+    IdentityStore.cpp
     HelperProcess.cpp
     Menu.cpp
     Mutation.cpp
@@ -32,6 +33,7 @@ set(SOURCES
     WebContentClient.cpp
     WebUI.cpp
     WebUI/BookmarksUI.cpp
+    WebUI/IdentitiesUI.cpp
     WebUI/ProcessesUI.cpp
     WebUI/SettingsUI.cpp
     WebUI/VersionUI.cpp
@@ -77,7 +79,7 @@ compile_ipc(${LADYBIRD_SOURCE_DIR}/Services/WebContent/WebUIClient.ipc ${CMAKE_B
 compile_ipc(${LADYBIRD_SOURCE_DIR}/Services/WebContent/WebUIServer.ipc ${CMAKE_BINARY_DIR}/Services/WebContent/WebUIServerEndpoint.h)
 
 ladybird_lib(LibWebView webview EXPLICIT_SYMBOL_EXPORT)
-target_link_libraries(LibWebView PRIVATE LibCore LibDatabase LibDevTools LibFileSystem LibGfx LibHTTP LibImageDecoderClient LibIPC LibRequests LibJS LibWeb LibUnicode LibURL LibSyntax LibTextCodec)
+target_link_libraries(LibWebView PRIVATE LibCore LibCrypto LibDatabase LibDevTools LibFileSystem LibGfx LibHTTP LibImageDecoderClient LibIPC LibRequests LibJS LibWeb LibUnicode LibURL LibSyntax LibTextCodec)
 
 if (LADYBIRD_ENABLE_SSHWEB)
     target_link_libraries(LibWebView PRIVATE LibSSHWebClient)
