@@ -101,11 +101,15 @@ bool Client::is_host_allowlisted(StringView host) const
         return false;
     for (auto const& allowed : m_manifest->proxy_cache->allow) {
         auto allowed_view = allowed.bytes_as_string_view();
+        if (allowed_view == "*"sv)
+            return true;
         if (allowed_view == host)
             return true;
-        // Subdomain match: "foo.fonts.googleapis.com" matches "fonts.googleapis.com"
-        if (host.ends_with(allowed_view) && host.length() > allowed_view.length() && host[host.length() - allowed_view.length() - 1] == '.')
-            return true;
+        if (allowed_view.starts_with("*."sv)) {
+            auto suffix = allowed_view.substring_view(1); // ".cartocdn.com"
+            if (host.ends_with(suffix) && host.length() > suffix.length())
+                return true;
+        }
     }
     return false;
 }

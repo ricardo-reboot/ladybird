@@ -479,9 +479,24 @@ GC::Ptr<PendingResponse> main_fetch(JS::Realm& realm, Infrastructure::FetchParam
             && request->current_url().scheme() == "file"sv
             && request->destination() == Infrastructure::Request::Destination::Font;
 
+        // AD-HOC (SSH-Web): When the page origin is ssh-web://, every http(s)
+        // subresource is tunneled through sshttpd's allowlisted proxy-call.
+        // The tunnel itself is the security boundary — CORS does not apply
+        // because no third-party origin ever sees the request directly. Treat
+        // these requests as basic-tainted so fetch() and XHR don't reject them.
+#ifdef LADYBIRD_ENABLE_SSHWEB
+        auto is_sshweb_proxied = origin && !origin->is_opaque()
+            && origin->scheme().has_value()
+            && origin->scheme().value() == "ssh-web"sv
+            && (request->current_url().scheme() == "http"sv || request->current_url().scheme() == "https"sv);
+#else
+        auto is_sshweb_proxied = false;
+#endif
+
         if (
             (origin && request->current_url().origin().is_same_origin(*origin) && request->response_tainting() == Infrastructure::Request::ResponseTainting::Basic)
             || is_file_to_file_font_load
+            || is_sshweb_proxied
             || request->current_url().scheme() == "data"sv
             || (request->mode() == Infrastructure::Request::Mode::Navigate || request->mode() == Infrastructure::Request::Mode::WebSocket)) {
             // 1. Set request’s response tainting to "basic".
