@@ -37,6 +37,9 @@
 #if defined(AK_OS_MACOS)
 #    include <LibIPC/TransportBootstrapMach.h>
 #endif
+#ifdef LADYBIRD_ENABLE_SSHWEB
+#    include <LibSSHWebClient/Client.h>
+#endif
 
 namespace WebView {
 
@@ -61,6 +64,9 @@ public:
 
     static Requests::RequestClient& request_server_client() { return *the().m_request_server_client; }
     static ImageDecoderClient::Client& image_decoder_client() { return *the().m_image_decoder_client; }
+#ifdef LADYBIRD_ENABLE_SSHWEB
+    static SSHWebClient::Client& sshweb_server_client() { return *the().m_sshweb_client; }
+#endif
 
     static BookmarkStore& bookmark_store() { return the().m_bookmark_store; }
     static HistoryStore& history_store() { return *the().m_history_store; }
@@ -207,6 +213,9 @@ private:
     ErrorOr<void> launch_request_server();
     ErrorOr<void> launch_image_decoder_server();
     ErrorOr<void> launch_devtools_server();
+#ifdef LADYBIRD_ENABLE_SSHWEB
+    ErrorOr<void> launch_sshweb_server();
+#endif
 
     void initialize_actions();
 
@@ -272,6 +281,9 @@ private:
 
     RefPtr<Requests::RequestClient> m_request_server_client;
     RefPtr<ImageDecoderClient::Client> m_image_decoder_client;
+#ifdef LADYBIRD_ENABLE_SSHWEB
+    RefPtr<SSHWebClient::Client> m_sshweb_client;
+#endif
 
     RefPtr<WebContentClient> m_spare_web_content_process;
     bool m_has_queued_task_to_launch_spare_web_content_process { false };

@@ -16,6 +16,9 @@
 #include <LibWebView/Forward.h>
 #include <LibWebView/ViewImplementation.h>
 #include <LibWebView/WebContentClient.h>
+#ifdef LADYBIRD_ENABLE_SSHWEB
+#    include <LibSSHWebClient/Client.h>
+#endif
 
 namespace WebView {
 
@@ -29,5 +32,10 @@ WEBVIEW_API ErrorOr<NonnullRefPtr<Requests::RequestClient>> launch_request_serve
 
 WEBVIEW_API ErrorOr<IPC::TransportHandle> connect_new_request_server_client();
 WEBVIEW_API ErrorOr<IPC::TransportHandle> connect_new_image_decoder_client();
+
+#ifdef LADYBIRD_ENABLE_SSHWEB
+WEBVIEW_API ErrorOr<NonnullRefPtr<SSHWebClient::Client>> launch_sshweb_server_process();
+WEBVIEW_API ErrorOr<IPC::TransportHandle> connect_new_sshweb_client();
+#endif
 
 }

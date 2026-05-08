@@ -75,6 +75,7 @@ set(ABOUT_PAGES
     newtab.html
     processes.html
     settings.html
+    sshweb-identities.html
     version.html
     webui.css
 )

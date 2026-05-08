@@ -100,6 +100,9 @@ else()
 endif()
 
 set(ladybird_helper_processes ImageDecoder RequestServer WebContent WebWorker)
+if (LADYBIRD_ENABLE_SSHWEB)
+    list(APPEND ladybird_helper_processes SSHWebServer)
+endif()
 
 add_dependencies(ladybird ${ladybird_helper_processes})
 # FIXME: Increase support for building targets on Windows

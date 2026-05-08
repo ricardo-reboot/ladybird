@@ -36,7 +36,14 @@ inline constexpr Array FETCH_SCHEMES = {
     "about"sv, "blob"sv, "data"sv, "file"sv, "http"sv, "https"sv,
 
     // AD-HOC: Internal fetch schemes:
-    "resource"sv
+    "resource"sv,
+
+#ifdef LADYBIRD_ENABLE_SSHWEB
+    // SSH-Web protocol — an authenticated, encrypted transport that replaces
+    // HTTP for browser/server interaction. ResourceLoader::handle_sshweb_load_request
+    // implements the actual fetch.
+    "ssh-web"sv,
+#endif
 };
 
 // https://fetch.spec.whatwg.org/#data-url-struct

@@ -260,6 +260,19 @@ public:
     Function<void()> on_web_content_crashed;
     Function<void()> on_web_content_process_change_for_cross_site_navigation;
 
+    // Fired when an ssh-web:// capabilities manifest has been loaded and the
+    // site name is available. Only fires on ssh-web:// origins.
+    Function<void(String const& site_name)> on_sshweb_manifest_ready;
+
+    // === Plan 7B TOFU ===
+    // Fired when SSHWebServer encounters an unknown host key and needs user confirmation.
+    // The UI should present a dialog and call send_tofu_decision when done.
+    Function<void(u64 prompt_id, String host, u16 port, String key_type, String fingerprint_sha256)> on_tofu_prompt;
+
+    // Send the user's decision back to WebContent → SSHWebServer.
+    void send_tofu_decision(u64 prompt_id, bool accepted, bool permanent);
+    // === End Plan 7B TOFU ===
+
     Menu& page_context_menu() { return *m_page_context_menu; }
     Menu& link_context_menu() { return *m_link_context_menu; }
     Menu& image_context_menu() { return *m_image_context_menu; }

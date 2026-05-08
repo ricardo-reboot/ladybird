@@ -19,6 +19,9 @@
 #include <LibURL/URL.h>
 #include <LibWeb/Forward.h>
 #include <LibWeb/Loader/NavigatorCompatibilityMode.h>
+#ifdef LADYBIRD_ENABLE_SSHWEB
+#    include <LibSSHWebClient/Client.h>
+#endif
 
 namespace Web {
 
@@ -31,6 +34,10 @@ public:
     static ResourceLoader& the();
 
     void set_client(NonnullRefPtr<Requests::RequestClient>);
+
+#ifdef LADYBIRD_ENABLE_SSHWEB
+    void set_sshweb_client(SSHWebClient::Client& client) { m_sshweb_client = &client; }
+#endif
 
     using OnHeadersReceived = GC::Function<void(HTTP::HeaderList const& response_headers, Optional<u32> status_code, Optional<String> const& reason_phrase, Optional<Core::AnonymousBuffer> javascript_bytecode, Optional<u64> javascript_bytecode_cache_vary_key)>;
     using OnDataReceived = GC::Function<void(ReadonlyBytes data)>;
@@ -81,6 +88,16 @@ private:
     template<typename ResourceHandler, typename ErrorHandler>
     void handle_resource_load_request(LoadRequest const& request, ResourceHandler on_resource, ErrorHandler on_error);
 
+#ifdef LADYBIRD_ENABLE_SSHWEB
+    // Async IPC-based ssh-web:// load. Dispatches to the SSHWebServer helper
+    // process via LibSSHWebClient. Callbacks are invoked asynchronously.
+    void dispatch_sshweb_load_request(
+        LoadRequest const& request,
+        GC::Root<OnHeadersReceived> on_headers_received,
+        GC::Root<OnDataReceived> on_data_received,
+        GC::Root<OnComplete> on_complete);
+#endif
+
     RefPtr<Requests::Request> start_network_request(LoadRequest const&);
     void handle_network_response_headers(LoadRequest const&, HTTP::HeaderList const&);
     void finish_network_request(NonnullRefPtr<Requests::Request>);
@@ -90,6 +107,9 @@ private:
     GC::Heap& m_heap;
     RefPtr<Requests::RequestClient> m_request_client;
     HashTable<NonnullRefPtr<Requests::Request>> m_active_requests;
+#ifdef LADYBIRD_ENABLE_SSHWEB
+    SSHWebClient::Client* m_sshweb_client { nullptr };
+#endif
 
     String m_user_agent;
     String m_platform;

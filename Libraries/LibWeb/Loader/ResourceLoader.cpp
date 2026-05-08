@@ -15,6 +15,14 @@
 #include <LibHTTP/Cookie/ParsedCookie.h>
 #include <LibRequests/Request.h>
 #include <LibRequests/RequestClient.h>
+
+#ifdef LADYBIRD_ENABLE_SSHWEB
+#    include <LibSSHWeb/Packfile.h>
+#    include <LibSSHWeb/URL.h>
+#    include <LibWeb/DOM/Document.h>
+#    include <LibWeb/HTML/TraversableNavigable.h>
+#    include <LibWeb/Page/Page.h>
+#endif
 #include <LibURL/Parser.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Requests.h>
 #include <LibWeb/Fetch/Infrastructure/URL.h>
@@ -407,6 +415,58 @@ RefPtr<Requests::Request> ResourceLoader::load(LoadRequest& request, GC::Root<On
         return nullptr;
     }
 
+#ifdef LADYBIRD_ENABLE_SSHWEB
+    // Take the ssh-web path if EITHER:
+    //   (a) the request URL itself is ssh-web://...  → receive-pack
+    //   (b) the page that initiated this load is on an ssh-web origin and the
+    //       sub-resource URL is http(s) → proxy-call through the SSH tunnel.
+    //
+    // (b) is what enforces the SSH-Web privacy guarantee: external resources
+    // (fonts, images, scripts) referenced by an ssh-web page never reach the
+    // open internet directly — they go via the server's allowlisted proxy.
+    auto request_scheme_is_sshweb = url.scheme() == "ssh-web"sv;
+    auto initiated_from_sshweb = [&]() -> bool {
+        if (auto page = request.page(); page) {
+            auto traversable = page->top_level_traversable();
+            auto active_document = traversable->active_document();
+            if (active_document && active_document->url().scheme() == "ssh-web"sv)
+                return true;
+        }
+        return false;
+    }();
+
+    if (request_scheme_is_sshweb || (initiated_from_sshweb && url.scheme().is_one_of("http"sv, "https"sv))) {
+        // For ssh-web:// (receive-pack) requests: kick a capabilities fetch so
+        // the allowlist is populated before subresource http(s) requests fire.
+        // This implements race-mitigation strategy (a): the manifest fetch is
+        // in-flight while the main document is being received and parsed; by the
+        // time JS issues fetch() to external hosts the manifest has typically
+        // arrived. The fetch is idempotent — subsequent calls are no-ops.
+        if (request_scheme_is_sshweb && m_sshweb_client) {
+            m_sshweb_client->fetch_capabilities_async(url);
+        }
+
+        // Enforce the proxy allowlist for outbound http(s) requests from ssh-web
+        // origins. Requests to hosts NOT in the server's proxy-cache.allow list
+        // are blocked here before any socket is opened.
+        if (!request_scheme_is_sshweb) {
+            auto host = url.serialized_host();
+            bool allowed = m_sshweb_client && m_sshweb_client->is_host_allowlisted(host);
+            if (!allowed) {
+                auto msg = ByteString::formatted(
+                    "ssh-web: request to '{}' blocked — host '{}' not in server's proxy-cache.allow list",
+                    url.serialize(), host);
+                log_failure(request, msg);
+                on_complete->function()(false, {}, StringView(msg));
+                return nullptr;
+            }
+        }
+
+        dispatch_sshweb_load_request(request, move(on_headers_received), move(on_data_received), move(on_complete));
+        return nullptr;
+    }
+#endif
+
     if (!url.scheme().is_one_of("http"sv, "https"sv)) {
         auto not_implemented_error = ByteString::formatted("Protocol not implemented: {}", url.scheme());
         log_failure(request, not_implemented_error);
@@ -520,5 +580,211 @@ void ResourceLoader::finish_network_request(NonnullRefPtr<Requests::Request> pro
         VERIFY(did_remove);
     });
 }
+
+#ifdef LADYBIRD_ENABLE_SSHWEB
+
+// Parses an HTTP/1.1 response (status line, headers, blank line, body) as
+// emitted by sshttpd's proxy-call binary form. We only need a small subset
+// of HTTP/1.1 — single-message, no chunked transfer encoding (sshttpd writes
+// Content-Length explicitly), no trailers.
+struct SSHWebProxyResult {
+    u32 status_code { 200 };
+    NonnullRefPtr<HTTP::HeaderList> headers;
+    ByteBuffer body;
+};
+
+static ErrorOr<SSHWebProxyResult> parse_sshweb_proxy_response(ByteBuffer&& raw)
+{
+    StringView view { raw };
+
+    // Find the end of the headers (first blank line).
+    auto header_end = view.find("\r\n\r\n"sv);
+    if (!header_end.has_value())
+        return Error::from_string_literal("ssh-web proxy-call: missing header terminator");
+
+    auto header_block = view.substring_view(0, *header_end);
+    auto body_view = view.substring_view(*header_end + 4);
+
+    auto lines = header_block.lines();
+    if (lines.is_empty())
+        return Error::from_string_literal("ssh-web proxy-call: empty response");
+
+    // Status line: "HTTP/1.1 <code> <reason>"
+    auto status_line = lines[0];
+    auto first_space = status_line.find(' ');
+    if (!first_space.has_value())
+        return Error::from_string_literal("ssh-web proxy-call: malformed status line");
+    auto rest = status_line.substring_view(*first_space + 1);
+    auto second_space = rest.find(' ');
+    auto code_view = second_space.has_value() ? rest.substring_view(0, *second_space) : rest;
+    auto status_code = code_view.to_number<u32>();
+    if (!status_code.has_value())
+        return Error::from_string_literal("ssh-web proxy-call: unparseable status code");
+
+    auto headers = HTTP::HeaderList::create({});
+    for (size_t i = 1; i < lines.size(); ++i) {
+        auto line = lines[i];
+        if (line.is_empty())
+            continue;
+        auto colon = line.find(':');
+        if (!colon.has_value())
+            continue;
+        auto name = line.substring_view(0, *colon);
+        auto value = line.substring_view(*colon + 1).trim_whitespace();
+        headers->append(HTTP::Header::isomorphic_encode(name, value));
+    }
+
+    auto body = TRY(ByteBuffer::copy(body_view.bytes()));
+    return SSHWebProxyResult {
+        .status_code = *status_code,
+        .headers = headers,
+        .body = move(body),
+    };
+}
+
+void ResourceLoader::dispatch_sshweb_load_request(
+    LoadRequest const& request,
+    GC::Root<OnHeadersReceived> on_headers_received,
+    GC::Root<OnDataReceived> on_data_received,
+    GC::Root<OnComplete> on_complete)
+{
+    if (!m_sshweb_client) {
+        auto error_message = ByteString("ssh-web: SSHWebServer client not available"sv);
+        log_failure(request, error_message);
+        on_complete->function()(false, {}, StringView(error_message));
+        return;
+    }
+
+    auto const& request_url = request.url().value();
+    bool is_proxy_call = request_url.scheme().is_one_of("http"sv, "https"sv);
+
+    // Resolve origin URL and command BEFORE crossing the IPC boundary —
+    // Page*/Document* must not be captured into the async lambda.
+    String origin_url_string;
+    if (is_proxy_call) {
+        auto page = request.page();
+        if (!page) {
+            auto error_message = ByteString("ssh-web proxy-call: no Page on request"sv);
+            log_failure(request, error_message);
+            on_complete->function()(false, {}, StringView(error_message));
+            return;
+        }
+        auto document = page->top_level_traversable()->active_document();
+        if (!document) {
+            auto error_message = ByteString("ssh-web proxy-call: no active document"sv);
+            log_failure(request, error_message);
+            on_complete->function()(false, {}, StringView(error_message));
+            return;
+        }
+        origin_url_string = document->url().serialize();
+    } else {
+        origin_url_string = request_url.serialize();
+    }
+
+    auto sshweb_url_or_error = SSHWeb::URL::parse(origin_url_string);
+    if (sshweb_url_or_error.is_error()) {
+        auto error_message = ByteString("ssh-web: invalid URL"sv);
+        log_failure(request, error_message);
+        on_complete->function()(false, {}, StringView(error_message));
+        return;
+    }
+
+    ByteString command;
+    if (is_proxy_call) {
+        command = ByteString::formatted("proxy-call GET {}", request_url.serialize());
+    } else {
+        auto sshweb_url = sshweb_url_or_error.value();
+        auto path = sshweb_url.path.is_empty() ? "/"_string : sshweb_url.path;
+        command = ByteString::formatted("receive-pack {}", path);
+    }
+
+    // Capture everything by value — the lambda fires asynchronously when
+    // request_finished arrives over IPC. GC::Root keeps the callbacks alive.
+    //
+    // The URL sent to the server MUST be the ssh-web:// origin (carries the
+    // SSH host:port). The actual fetch target is encoded in the command
+    // string ("proxy-call GET https://..."). Sending the http(s) request URL
+    // here would fail the server-side SSHWeb::URL::parse.
+    // Capture page_id for TOFU prompt routing (Plan 7B).
+    u64 page_id = 0;
+    if (auto page = request.page())
+        page_id = page->client().id();
+
+    auto serialized_path = request_url.serialize_path();
+    auto origin_url_for_ipc = URL::Parser::basic_parse(origin_url_string).value();
+    m_sshweb_client->execute(origin_url_for_ipc, move(command),
+        [is_proxy_call, serialized_path = move(serialized_path), on_headers_received, on_data_received, on_complete]
+        (ErrorOr<ByteBuffer> result) mutable {
+            if (result.is_error()) {
+                auto msg = ByteString::formatted("ssh-web: {}", result.error());
+                on_complete->function()(false, {}, StringView(msg));
+                return;
+            }
+            auto raw = result.release_value();
+            if (is_proxy_call) {
+                auto parsed = parse_sshweb_proxy_response(move(raw));
+                if (parsed.is_error()) {
+                    auto msg = ByteString::formatted("ssh-web: {}", parsed.error());
+                    on_complete->function()(false, {}, StringView(msg));
+                    return;
+                }
+                auto r = parsed.release_value();
+                on_headers_received->function()(r.headers, r.status_code, {});
+                on_data_received->function()(r.body.bytes());
+                on_complete->function()(true, {}, {});
+            } else {
+                // receive-pack response is one of two formats:
+                //   1. Git packfile (filesystem mode) — first 4 bytes "PACK"
+                //   2. HTTP/1.1 wire format (server in backend-fallback mode) —
+                //      starts with "HTTP/" — same shape proxy-call returns.
+                // Detect by sniffing the first 4 bytes.
+                auto bytes = raw.bytes();
+                bool is_pack = bytes.size() >= 4 && bytes[0] == 'P' && bytes[1] == 'A' && bytes[2] == 'C' && bytes[3] == 'K';
+                if (is_pack) {
+                    auto blob_or_error = SSHWeb::first_blob_in_packfile(bytes);
+                    if (blob_or_error.is_error()) {
+                        auto msg = ByteString::formatted("ssh-web: {}", blob_or_error.error());
+                        on_complete->function()(false, {}, StringView(msg));
+                        return;
+                    }
+                    auto body = blob_or_error.release_value();
+                    StringView mime = Core::guess_mime_type_based_on_filename(serialized_path);
+                    if (mime == "application/octet-stream"sv)
+                        mime = "text/html"sv;
+                    auto headers = HTTP::HeaderList::create({});
+                    headers->append(HTTP::Header::isomorphic_encode("Content-Type"sv, mime));
+                    on_headers_received->function()(headers, 200, {});
+                    on_data_received->function()(body.bytes());
+                    on_complete->function()(true, {}, {});
+                } else {
+                    // Backend-fallback path: parse HTTP/1.1 wire format.
+                    auto parsed = parse_sshweb_proxy_response(move(raw));
+                    if (parsed.is_error()) {
+                        // Backend likely down / returned garbage. Synthesize a
+                        // 502 Bad Gateway so the user sees a readable page
+                        // instead of a raw parser error.
+                        auto headers = HTTP::HeaderList::create({});
+                        headers->append(HTTP::Header::isomorphic_encode("Content-Type"sv, "text/html; charset=utf-8"sv));
+                        auto body = ByteString::formatted(
+                            "<!DOCTYPE html><meta charset=utf-8><title>502 Bad Gateway</title>"
+                            "<style>body{{font:14px system-ui,sans-serif;max-width:40rem;margin:4rem auto;padding:0 1rem;color:#1a1a1a}}"
+                            "h1{{font-size:1.4rem}}code{{background:#f0f0f0;padding:.1rem .3rem;border-radius:3px}}</style>"
+                            "<h1>502 Bad Gateway</h1>"
+                            "<p>The SSH-Web server's backend did not return a valid HTTP response.</p>"
+                            "<p><code>{}</code></p>", parsed.error());
+                        on_headers_received->function()(headers, 502, {});
+                        on_data_received->function()(StringView(body).bytes());
+                        on_complete->function()(true, {}, {});
+                        return;
+                    }
+                    auto r = parsed.release_value();
+                    on_headers_received->function()(r.headers, r.status_code, {});
+                    on_data_received->function()(r.body.bytes());
+                    on_complete->function()(true, {}, {});
+                }
+            }
+        }, page_id);
+}
+#endif
 
 }

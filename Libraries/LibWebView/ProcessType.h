@@ -16,6 +16,9 @@ enum class ProcessType : u8 {
     WebWorker,
     RequestServer,
     ImageDecoder,
+#ifdef LADYBIRD_ENABLE_SSHWEB
+    SSHWebServer,
+#endif
 };
 
 }

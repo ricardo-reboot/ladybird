@@ -404,6 +404,9 @@ static ErrorOr<NonnullRefPtr<WebContentClient>> create_web_content_client(Option
 {
     auto request_server_handle = TRY(connect_new_request_server_client());
     auto image_decoder_handle = TRY(connect_new_image_decoder_client());
+#ifdef LADYBIRD_ENABLE_SSHWEB
+    auto sshweb_handle = TRY(connect_new_sshweb_client());
+#endif
 
     NonnullRefPtr<WebContentClient> client = view.has_value()
         ? TRY(WebView::launch_web_content_process(*view))
@@ -411,6 +414,9 @@ static ErrorOr<NonnullRefPtr<WebContentClient>> create_web_content_client(Option
 
     client->async_connect_to_request_server(move(request_server_handle));
     client->async_connect_to_image_decoder(move(image_decoder_handle));
+#ifdef LADYBIRD_ENABLE_SSHWEB
+    client->async_connect_to_sshweb_server(move(sshweb_handle));
+#endif
 
     return client;
 }
@@ -512,6 +518,9 @@ ErrorOr<void> Application::launch_services()
 
     TRY(launch_request_server());
     TRY(launch_image_decoder_server());
+#ifdef LADYBIRD_ENABLE_SSHWEB
+    TRY(launch_sshweb_server());
+#endif
 
     if (m_browser_options.devtools_port.has_value())
         TRY(launch_devtools_server());
@@ -596,6 +605,14 @@ ErrorOr<void> Application::launch_image_decoder_server()
 
     return {};
 }
+
+#ifdef LADYBIRD_ENABLE_SSHWEB
+ErrorOr<void> Application::launch_sshweb_server()
+{
+    m_sshweb_client = TRY(launch_sshweb_server_process());
+    return {};
+}
+#endif
 
 ErrorOr<void> Application::launch_devtools_server()
 {
@@ -757,6 +774,11 @@ void Application::process_did_exit(Process&& process)
     case ProcessType::Browser:
         dbgln("Invalid process type to be dying: Browser");
         VERIFY_NOT_REACHED();
+#ifdef LADYBIRD_ENABLE_SSHWEB
+    case ProcessType::SSHWebServer:
+        dbgln_if(WEBVIEW_PROCESS_DEBUG, "SSHWebServer {} died; not auto-restarting.", process.pid());
+        break;
+#endif
     }
 }
 

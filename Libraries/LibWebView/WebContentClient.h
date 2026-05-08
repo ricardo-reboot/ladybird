@@ -148,6 +148,10 @@ private:
     virtual void did_receive_test_variant_metadata(u64 page_id, JsonValue) override;
     virtual void did_set_browser_zoom(u64 page_id, double factor) override;
     virtual void did_find_in_page(u64 page_id, size_t current_match_index, Optional<size_t> total_match_count) override;
+    virtual void did_sshweb_manifest_load(u64 page_id, String site_name) override;
+    // === Plan 7B TOFU ===
+    virtual void did_sshweb_tofu_prompt(u64 page_id, u64 prompt_id, ByteString host, u16 port, ByteString key_type, ByteString fingerprint_sha256) override;
+    // === End Plan 7B TOFU ===
     virtual void did_change_theme_color(u64 page_id, Gfx::Color color) override;
     virtual void did_insert_clipboard_entry(u64 page_id, Web::Clipboard::SystemClipboardRepresentation, String presentation_style) override;
     virtual void did_request_clipboard_entries(u64 page_id, u64 request_id) override;

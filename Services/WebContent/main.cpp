@@ -22,6 +22,8 @@
 #include <LibUnicode/TimeZone.h>
 #include <LibWeb/Bindings/MainThreadVM.h>
 #include <LibWeb/DOM/Document.h>
+#include <LibWeb/HTML/BrowsingContext.h>
+#include <LibWeb/Page/Page.h>
 #include <LibWeb/Fetch/Fetching/Fetching.h>
 #include <LibWeb/HTML/UniversalGlobalScope.h>
 #include <LibWeb/HTML/Window.h>
@@ -37,8 +39,12 @@
 #include <LibWebView/Plugins/ImageCodecPlugin.h>
 #include <LibWebView/SiteIsolation.h>
 #include <LibWebView/Utilities.h>
+#ifdef LADYBIRD_ENABLE_SSHWEB
+#    include <LibSSHWebClient/Client.h>
+#endif
 #include <WebContent/ConnectionFromClient.h>
 #include <WebContent/PageClient.h>
+#include <WebContent/PageHost.h>
 #include <WebContent/WebDriverConnection.h>
 
 #include <openssl/thread.h>
@@ -104,6 +110,9 @@ static ErrorOr<void> load_content_filters(StringView config_path);
 
 static ErrorOr<void> connect_to_resource_loader(GC::Heap& heap, IPC::TransportHandle const& handle);
 static ErrorOr<void> connect_to_image_decoder(IPC::TransportHandle const& handle);
+#ifdef LADYBIRD_ENABLE_SSHWEB
+static ErrorOr<void> connect_to_sshweb_server(IPC::TransportHandle const& handle, Function<void(String const&)> on_manifest_ready = {});
+#endif
 
 ErrorOr<int> ladybird_main(Main::Arguments arguments)
 {
@@ -270,6 +279,25 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
         if (auto result = connect_to_image_decoder(handle); result.is_error())
             dbgln("Failed to connect to image decoder: {}", result.error());
     };
+#ifdef LADYBIRD_ENABLE_SSHWEB
+    webcontent_client->on_sshweb_server_connection = [webcontent_client](auto const& handle) {
+        // Forward manifest loads to the UI process so the address bar can tint.
+        auto on_manifest = [webcontent_client](String const& site_name) {
+            // Send to every page; the UI side gates on the navigated URL and
+            // clears the indicator when the user leaves an ssh-web origin.
+            // We can't gate here because the manifest typically arrives while
+            // the page is still on about:blank (navigation not yet committed).
+            webcontent_client->page_host().for_each_page([&](WebContent::PageClient& page_client) {
+                webcontent_client->async_did_sshweb_manifest_load(page_client.id(), site_name);
+            });
+        };
+        if (auto result = connect_to_sshweb_server(handle, move(on_manifest)); result.is_error()) {
+            dbgln("Failed to connect to SSHWebServer: {}", result.error());
+            return;
+        }
+        // TOFU prompt forwarding (Plan 7B) — to be wired in a follow-up.
+    };
+#endif
 
     return event_loop.exec();
 }
@@ -327,3 +355,32 @@ ErrorOr<void> connect_to_image_decoder(IPC::TransportHandle const& handle)
         Web::Platform::ImageCodecPlugin::install(*new WebView::ImageCodecPlugin(move(new_client)));
     return {};
 }
+
+#ifdef LADYBIRD_ENABLE_SSHWEB
+// === Plan 7B TOFU ===
+// Global accessor so ConnectionFromClient::sshweb_tofu_decision can forward to the server.
+static RefPtr<SSHWebClient::Client> s_sshweb_client;
+
+[[maybe_unused]] static SSHWebClient::Client* current_sshweb_client()
+{
+    return s_sshweb_client.ptr();
+}
+// === End Plan 7B TOFU ===
+
+ErrorOr<void> connect_to_sshweb_server(IPC::TransportHandle const& handle, Function<void(String const&)> on_manifest_ready)
+{
+    auto transport = TRY(handle.create_transport());
+    auto sshweb_client = TRY(try_make_ref_counted<SSHWebClient::Client>(move(transport)));
+    if (on_manifest_ready) {
+        sshweb_client->on_manifest_ready = [callback = move(on_manifest_ready)](SSHWeb::CapabilitiesManifest const& manifest) {
+            callback(manifest.site.name);
+        };
+    }
+    if (Web::ResourceLoader::is_initialized())
+        Web::ResourceLoader::the().set_sshweb_client(*sshweb_client);
+    // Keep the client alive by storing it in a static — ResourceLoader only
+    // holds a raw pointer (same pattern as ImageCodecPlugin).
+    s_sshweb_client = move(sshweb_client);
+    return {};
+}
+#endif

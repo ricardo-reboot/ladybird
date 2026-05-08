@@ -1,0 +1,11 @@
+endpoint SSHWebClient
+{
+    // The server has received a host key and asks the client whether to trust it.
+    tofu_prompt(u64 prompt_id, ByteString host, u16 port, ByteString key_type, ByteString fingerprint_sha256) =|
+
+    // Streaming response chunk for a previously-issued start_request.
+    request_chunk(u64 request_id, ByteBuffer data, bool is_final) =|
+
+    // Terminal status. error is empty on success, populated on failure.
+    request_finished(u64 request_id, ByteString error) =|
+}

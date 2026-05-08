@@ -25,6 +25,10 @@ ProcessType process_type_from_name(StringView name)
         return ProcessType::RequestServer;
     if (name == "ImageDecoder"sv)
         return ProcessType::ImageDecoder;
+#ifdef LADYBIRD_ENABLE_SSHWEB
+    if (name == "SSHWebServer"sv)
+        return ProcessType::SSHWebServer;
+#endif
 
     dbgln("Unknown process type: '{}'", name);
     VERIFY_NOT_REACHED();
@@ -43,6 +47,10 @@ StringView process_name_from_type(ProcessType type)
         return "RequestServer"sv;
     case ProcessType::ImageDecoder:
         return "ImageDecoder"sv;
+#ifdef LADYBIRD_ENABLE_SSHWEB
+    case ProcessType::SSHWebServer:
+        return "SSHWebServer"sv;
+#endif
     }
     VERIFY_NOT_REACHED();
 }

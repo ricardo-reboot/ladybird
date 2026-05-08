@@ -117,6 +117,11 @@ Optional<u16> default_port_for_scheme(StringView scheme)
         return 80;
     if (scheme == "wss"sv)
         return 443;
+#ifdef LADYBIRD_ENABLE_SSHWEB
+    // SSH-Web: SSH port 22 ++ HTTPS port 443 ⇒ 22443. See spec/SSH-WEB-SPEC.md §2.1.
+    if (scheme == "ssh-web"sv)
+        return 22443;
+#endif
     return {};
 }
 
@@ -176,6 +181,11 @@ ReadonlySpan<StringView> special_schemes()
         "https"sv,
         "ws"sv,
         "wss"sv,
+#ifdef LADYBIRD_ENABLE_SSHWEB
+        // SSH-Web is "special" in the WHATWG sense — its URLs have an authority
+        // component (host:port), not an opaque path.
+        "ssh-web"sv,
+#endif
     });
     return schemes;
 }

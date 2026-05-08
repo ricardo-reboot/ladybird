@@ -49,6 +49,7 @@ public:
 
     Function<void(IPC::TransportHandle const&)> on_request_server_connection;
     Function<void(IPC::TransportHandle const&)> on_image_decoder_connection;
+    Function<void(IPC::TransportHandle const&)> on_sshweb_server_connection;
 
     Queue<Web::QueuedInputEvent>& input_event_queue() { return m_input_event_queue; }
 
@@ -66,6 +67,7 @@ private:
     virtual void connect_to_web_ui(u64 page_id, IPC::TransportHandle handle) override;
     virtual void connect_to_request_server(IPC::TransportHandle handle) override;
     virtual void connect_to_image_decoder(IPC::TransportHandle handle) override;
+    virtual void connect_to_sshweb_server(IPC::TransportHandle handle) override;
     virtual void update_system_theme(u64 page_id, Core::AnonymousBuffer) override;
     virtual void update_screen_rects(u64 page_id, Vector<Web::DevicePixelRect>, u32) override;
     virtual void load_url(u64 page_id, URL::URL) override;
@@ -174,6 +176,10 @@ private:
     virtual void request_close(u64 page_id) override;
 
     virtual void exit_fullscreen(u64 page_id) override;
+
+    // === Plan 7B TOFU ===
+    virtual void sshweb_tofu_decision(u64 prompt_id, bool accepted, bool permanent) override;
+    // === End Plan 7B TOFU ===
 
     NonnullOwnPtr<PageHost> m_page_host;
 

@@ -99,6 +99,7 @@
       "name": "libproxy",
       "platform": "!(android | bsd)"
     },
+    "libssh2",
     "libtommath",
     {
       "name": "libwebp",
@@ -340,6 +341,10 @@
     {
       "name": "libproxy",
       "version": "0.4.18#3"
+    },
+    {
+      "name": "libssh2",
+      "version": "1.11.1"
     },
     {
       "name": "libtommath",

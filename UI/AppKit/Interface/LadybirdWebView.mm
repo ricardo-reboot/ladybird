@@ -346,6 +346,43 @@ struct HideCursor {
         [self.observer onURLChange:url];
     };
 
+    m_web_view_bridge->on_sshweb_manifest_ready = [weak_self](auto const& site_name) {
+        LadybirdWebView* self = weak_self;
+        if (self == nil) {
+            return;
+        }
+        // Fire on the main thread — the IPC callback arrives on the IPC
+        // dispatch thread but all AppKit mutations must happen on main.
+        dispatch_async(dispatch_get_main_queue(), ^{
+            LadybirdWebView* strong_self = weak_self;
+            if (strong_self == nil)
+                return;
+            auto* ns_name = Ladybird::string_to_ns_string(site_name);
+            [strong_self.observer onSSHWebManifestLoaded:ns_name];
+        });
+    };
+
+    // === Plan 7B TOFU ===
+    m_web_view_bridge->on_tofu_prompt = [weak_self](u64 prompt_id, String host, u16 port, String key_type, String fingerprint) {
+        LadybirdWebView* self = weak_self;
+        if (self == nil)
+            return;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            LadybirdWebView* strong_self = weak_self;
+            if (strong_self == nil)
+                return;
+            auto* ns_host = Ladybird::string_to_ns_string(host);
+            auto* ns_key_type = Ladybird::string_to_ns_string(key_type);
+            auto* ns_fingerprint = Ladybird::string_to_ns_string(fingerprint);
+            [strong_self.observer onTOFUPrompt:prompt_id
+                                          host:ns_host
+                                          port:port
+                                       keyType:ns_key_type
+                                   fingerprint:ns_fingerprint];
+        });
+    };
+    // === End Plan 7B TOFU ===
+
     m_web_view_bridge->on_title_change = [weak_self](auto const& title) {
         LadybirdWebView* self = weak_self;
         if (self == nil) {

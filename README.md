@@ -1,5 +1,7 @@
 # Ladybird
 
+> **This is `sshweb-browser`** — a fork of [Ladybird](https://github.com/LadybirdBrowser/ladybird) that natively speaks the [SSH-Web protocol](https://github.com/bugscave/sshttpd). The browser is identical to upstream Ladybird with `LADYBIRD_ENABLE_SSHWEB=OFF` and adds an SSH-Web transport stack with `=ON` (default). See [Documentation/SSHWeb/ForkNotes.md](Documentation/SSHWeb/ForkNotes.md) for fork-specific details.
+
 [Ladybird](https://ladybird.org) is a truly independent web browser, using a novel engine based on web standards.
 
 > [!IMPORTANT]
