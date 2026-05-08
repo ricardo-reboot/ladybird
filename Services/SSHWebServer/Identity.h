@@ -23,6 +23,7 @@ struct Identity {
     String label;
     String private_key_path;
     String public_key_path;
+    String passphrase;
 };
 
 class IdentityStore {

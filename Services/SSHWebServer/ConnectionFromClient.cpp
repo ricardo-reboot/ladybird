@@ -40,6 +40,11 @@ void ConnectionFromClient::die()
     m_ssh_pool.clear();
 }
 
+void ConnectionFromClient::clear_ssh_pool()
+{
+    m_ssh_pool.clear();
+}
+
 Messages::SSHWebServer::InitTransportResponse ConnectionFromClient::init_transport([[maybe_unused]] int peer_pid)
 {
 #ifdef AK_OS_WINDOWS
@@ -103,7 +108,7 @@ void ConnectionFromClient::tofu_decision(u64 prompt_id, bool accepted, bool perm
     }
 }
 
-void ConnectionFromClient::start_request(u64 request_id, URL::URL url, ByteString command)
+void ConnectionFromClient::start_request(u64 request_id, URL::URL url, ByteString command, ByteString identity_id, ByteString identity_dir, ByteString passphrase)
 {
     // Pull host/port out of the LibURL URL.
     auto sshweb_url_or_error = SSHWeb::URL::parse(url.serialize());
@@ -113,20 +118,20 @@ void ConnectionFromClient::start_request(u64 request_id, URL::URL url, ByteStrin
     }
     auto sshweb_url = sshweb_url_or_error.release_value();
 
-    // Plan 5b: pool lookup — reuse an open connection if one exists for this host:port.
-    auto key = pool_key(sshweb_url.host.bytes_as_string_view(), sshweb_url.port);
+    // Plan 5b: pool lookup — reuse an open connection if one exists for this host:port:identity.
+    auto key = pool_key(sshweb_url.host.bytes_as_string_view(), sshweb_url.port, identity_id.view());
     if (auto it = m_ssh_pool.find(key); it != m_ssh_pool.end()) {
-        // Connection already open — execute command synchronously on the IPC thread.
         SSHWeb::Connection* connection = it->value.ptr();
         auto bytes_or_error = connection->execute_command(command.view());
         if (bytes_or_error.is_error()) {
-            async_request_finished(request_id, ByteString::formatted("execute: {}", bytes_or_error.error()));
+            // Stale connection (e.g. server restarted) — evict and fall through to reconnect.
+            m_ssh_pool.remove(it);
+        } else {
+            auto bytes = bytes_or_error.release_value();
+            async_request_chunk(request_id, bytes.bytes(), true);
+            async_request_finished(request_id, ByteString {});
             return;
         }
-        auto bytes = bytes_or_error.release_value();
-        async_request_chunk(request_id, bytes.bytes(), true);
-        async_request_finished(request_id, ByteString {});
-        return;
     }
 
     // === Plan 7B TOFU ===
@@ -152,6 +157,9 @@ void ConnectionFromClient::start_request(u64 request_id, URL::URL url, ByteStrin
         u16 port;
         ByteString pool_key_str;
         ByteString command;
+        ByteString identity_id;
+        ByteString identity_dir;
+        ByteString passphrase;
     };
 
     auto* args = new ThreadArgs {
@@ -162,6 +170,9 @@ void ConnectionFromClient::start_request(u64 request_id, URL::URL url, ByteStrin
         port,
         move(pool_key_str),
         move(command),
+        move(identity_id),
+        move(identity_dir),
+        move(passphrase),
     };
 
     pthread_t thread;
@@ -174,7 +185,20 @@ void ConnectionFromClient::start_request(u64 request_id, URL::URL url, ByteStrin
         u16 port = args->port;
         ByteString pool_key_str = move(args->pool_key_str);
         ByteString command = move(args->command);
+        ByteString identity_id = move(args->identity_id);
+        ByteString identity_dir = move(args->identity_dir);
+        ByteString passphrase = move(args->passphrase);
         delete args;
+
+        Optional<SSHWeb::Identity> identity;
+        if (!identity_id.is_empty() && !identity_dir.is_empty()) {
+            identity = SSHWeb::Identity {
+                .label = MUST(String::from_utf8(identity_id.view())),
+                .private_key_path = MUST(String::formatted("{}/ed25519", identity_dir)),
+                .public_key_path = MUST(String::formatted("{}/ed25519.pub", identity_dir)),
+                .passphrase = MUST(String::from_utf8(passphrase.view())),
+            };
+        }
 
         // Open known_hosts — each open attempt gets a fresh view.
         auto known_hosts_or_error = SSHWeb::KnownHosts::with_default_root();
@@ -268,7 +292,7 @@ void ConnectionFromClient::start_request(u64 request_id, URL::URL url, ByteStrin
             port,
             known_hosts,
             move(tofu_decision_cb),
-            {});
+            move(identity));
 
         if (connection_or_error.is_error()) {
             auto msg = ByteString::formatted("ssh connect: {}", connection_or_error.error());

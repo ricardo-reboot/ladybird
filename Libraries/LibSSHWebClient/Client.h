@@ -67,6 +67,12 @@ public:
     Function<void(u64, u64, ByteString, u16, ByteString, ByteString)> on_tofu_prompt;
     // === End Plan 7B TOFU ===
 
+    // Set the active identity for all subsequent SSH requests.
+    void set_active_identity(ByteString identity_id, ByteString identity_dir, ByteString passphrase);
+
+    // Drop all pooled SSH connections so the next request re-authenticates.
+    void clear_ssh_pool();
+
 private:
     // SSHWebClientEndpoint overrides — called by the server back at us.
     virtual void tofu_prompt(u64 prompt_id, ByteString host, u16 port, ByteString key_type, ByteString fingerprint_sha256) override;
@@ -79,10 +85,17 @@ private:
         u64 page_id { 0 };
     };
 
+    struct ActiveIdentity {
+        ByteString id;
+        ByteString dir;
+        ByteString passphrase;
+    };
+
     HashMap<u64, PendingRequest> m_pending;
     u64 m_next_request_id { 1 };
     u64 m_last_page_id { 0 };   // page_id of the most recent execute() call
     Optional<SSHWeb::CapabilitiesManifest> m_manifest;
+    Optional<ActiveIdentity> m_active_identity;
     bool m_capabilities_fetch_in_flight { false };
 };
 

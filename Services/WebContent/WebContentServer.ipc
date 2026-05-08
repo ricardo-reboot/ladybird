@@ -156,4 +156,8 @@ endpoint WebContentServer
     // Send the user's TOFU decision back to SSHWebServer.
     sshweb_tofu_decision(u64 prompt_id, bool accepted, bool permanent) =|
     // === End Plan 7B TOFU ===
+
+    // Set the active SSH-Web identity for all subsequent requests.
+    // Empty identity_id = anonymous mode.
+    set_active_sshweb_identity(ByteString identity_id, ByteString identity_dir, ByteString passphrase) =|
 }

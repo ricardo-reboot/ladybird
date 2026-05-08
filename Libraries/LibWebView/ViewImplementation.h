@@ -273,6 +273,9 @@ public:
     void send_tofu_decision(u64 prompt_id, bool accepted, bool permanent);
     // === End Plan 7B TOFU ===
 
+    // Set the active SSH-Web identity for all subsequent requests.
+    void set_active_sshweb_identity(ByteString identity_id, ByteString identity_dir, ByteString passphrase);
+
     Menu& page_context_menu() { return *m_page_context_menu; }
     Menu& link_context_menu() { return *m_link_context_menu; }
     Menu& image_context_menu() { return *m_image_context_menu; }

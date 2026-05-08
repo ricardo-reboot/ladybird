@@ -361,7 +361,9 @@ ErrorOr<void> connect_to_image_decoder(IPC::TransportHandle const& handle)
 // Global accessor so ConnectionFromClient::sshweb_tofu_decision can forward to the server.
 static RefPtr<SSHWebClient::Client> s_sshweb_client;
 
-[[maybe_unused]] static SSHWebClient::Client* current_sshweb_client()
+// Declared extern in ConnectionFromClient.cpp to forward identity changes.
+SSHWebClient::Client* current_sshweb_client();
+SSHWebClient::Client* current_sshweb_client()
 {
     return s_sshweb_client.ptr();
 }

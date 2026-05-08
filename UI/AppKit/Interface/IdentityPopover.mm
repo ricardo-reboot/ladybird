@@ -5,6 +5,7 @@
  */
 
 #include <LibWebView/IdentityStore.h>
+#include <LibWebView/ViewImplementation.h>
 #include <LibURL/Parser.h>
 
 #import <Interface/IdentityPopover.h>
@@ -24,6 +25,7 @@ static constexpr CGFloat const SEPARATOR_HEIGHT = 1;
 
 // Tracks which identity is active. Empty string = anonymous.
 static NSString* s_active_identity_id = @"";
+static NSString* s_active_passphrase = @"";
 
 @interface IdentityPopover ()
 @property (nonatomic, strong) NSPopover* popover;
@@ -281,6 +283,20 @@ static NSString* s_active_identity_id = @"";
 
 #pragma mark - Actions
 
+- (void)notifyIdentityChange:(NSString*)identityId passphrase:(NSString*)passphrase
+{
+    if (_tab == nil)
+        return;
+    auto idBytes = ByteString([identityId UTF8String] ?: "", [identityId lengthOfBytesUsingEncoding:NSUTF8StringEncoding]);
+    ByteString dirBytes;
+    if (idBytes.length() > 0)
+        dirBytes = ByteString::formatted("{}/{}", WebView::IdentityStore::storage_directory(), idBytes);
+    auto passBytes = ByteString([passphrase UTF8String] ?: "", [passphrase lengthOfBytesUsingEncoding:NSUTF8StringEncoding]);
+    auto& view = [[_tab web_view] view];
+    view.set_active_sshweb_identity(move(idBytes), move(dirBytes), move(passBytes));
+    view.reload();
+}
+
 - (void)identityRowClicked:(NSClickGestureRecognizer*)gesture
 {
     auto* row = gesture.view;
@@ -296,6 +312,8 @@ static NSString* s_active_identity_id = @"";
         [self promptPassphraseForIdentity:idStr];
     } else {
         s_active_identity_id = idStr;
+        s_active_passphrase = @"";
+        [self notifyIdentityChange:idStr passphrase:@""];
         [_popover close];
     }
 }
@@ -328,12 +346,12 @@ static NSString* s_active_identity_id = @"";
     if (passphrase.length == 0)
         return;
 
-    // Try to decrypt — verifies the passphrase is correct.
+    // Verify passphrase via ssh-keygen.
     auto akId = MUST(String::from_utf8(StringView { [identityId UTF8String], [identityId lengthOfBytesUsingEncoding:NSUTF8StringEncoding] }));
     auto akPass = MUST(String::from_utf8(StringView { [passphrase UTF8String], [passphrase lengthOfBytesUsingEncoding:NSUTF8StringEncoding] }));
 
-    auto result = m_store.decrypt_private_key(akId, akPass);
-    if (result.is_error()) {
+    auto result = m_store.verify_passphrase(akId, akPass);
+    if (result.is_error() || !result.value()) {
         auto* errorAlert = [[NSAlert alloc] init];
         errorAlert.messageText = @"Wrong Passphrase";
         errorAlert.informativeText = @"The passphrase you entered is incorrect.";
@@ -344,6 +362,8 @@ static NSString* s_active_identity_id = @"";
     }
 
     s_active_identity_id = identityId;
+    s_active_passphrase = [passphrase copy];
+    [self notifyIdentityChange:identityId passphrase:passphrase];
 }
 
 - (void)generateNewIdentity:(NSClickGestureRecognizer*)gesture
@@ -465,6 +485,8 @@ static NSString* s_active_identity_id = @"";
                                               length:id.bytes().size()
                                             encoding:NSUTF8StringEncoding];
         s_active_identity_id = nsId;
+        s_active_passphrase = [passphrase copy];
+        [self notifyIdentityChange:nsId passphrase:passphrase];
     }
     [_popover close];
 }

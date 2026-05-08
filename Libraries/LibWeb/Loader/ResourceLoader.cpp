@@ -710,6 +710,9 @@ void ResourceLoader::dispatch_sshweb_load_request(
     if (auto page = request.page())
         page_id = page->client().id();
 
+    if (!is_proxy_call)
+        m_sshweb_client->clear_ssh_pool();
+
     auto serialized_path = request_url.serialize_path();
     auto origin_url_for_ipc = URL::Parser::basic_parse(origin_url_string).value();
     m_sshweb_client->execute(origin_url_for_ipc, move(command),
@@ -760,9 +763,6 @@ void ResourceLoader::dispatch_sshweb_load_request(
                     // Backend-fallback path: parse HTTP/1.1 wire format.
                     auto parsed = parse_sshweb_proxy_response(move(raw));
                     if (parsed.is_error()) {
-                        // Backend likely down / returned garbage. Synthesize a
-                        // 502 Bad Gateway so the user sees a readable page
-                        // instead of a raw parser error.
                         auto headers = HTTP::HeaderList::create({});
                         headers->append(HTTP::Header::isomorphic_encode("Content-Type"sv, "text/html; charset=utf-8"sv));
                         auto body = ByteString::formatted(
@@ -778,6 +778,7 @@ void ResourceLoader::dispatch_sshweb_load_request(
                         return;
                     }
                     auto r = parsed.release_value();
+
                     on_headers_received->function()(r.headers, r.status_code, {}, {}, {});
                     on_data_received->function()(r.body.bytes());
                     on_complete->function()(true, {}, {});

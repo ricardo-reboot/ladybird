@@ -18,12 +18,35 @@ Client::Client(NonnullOwnPtr<IPC::Transport> transport)
 
 Client::~Client() = default;
 
+void Client::set_active_identity(ByteString identity_id, ByteString identity_dir, ByteString passphrase)
+{
+    if (identity_id.is_empty()) {
+        m_active_identity.clear();
+    } else {
+        m_active_identity = ActiveIdentity {
+            .id = move(identity_id),
+            .dir = move(identity_dir),
+            .passphrase = move(passphrase),
+        };
+    }
+}
+
+void Client::clear_ssh_pool()
+{
+    IPCProxy::async_clear_ssh_pool();
+}
+
 void Client::execute(URL::URL const& url, ByteString command, OnComplete on_complete, u64 page_id)
 {
     auto request_id = m_next_request_id++;
     m_last_page_id = page_id;
     m_pending.set(request_id, PendingRequest { .accumulated = {}, .on_complete = move(on_complete), .page_id = page_id });
-    IPCProxy::async_start_request(request_id, url, move(command));
+
+    if (m_active_identity.has_value())
+        IPCProxy::async_start_request(request_id, url, move(command),
+            m_active_identity->id, m_active_identity->dir, m_active_identity->passphrase);
+    else
+        IPCProxy::async_start_request(request_id, url, move(command), {}, {}, {});
 }
 
 // === Plan 7B TOFU ===

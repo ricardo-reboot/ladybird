@@ -1264,7 +1264,13 @@ static void perform_navigation_params_fetch(JS::Realm& realm, GC::Ref<Navigation
         state_holder->about_base_url = {};
 
         // 20. If locationURL's scheme is not an HTTP(S) scheme, then:
-        if (!Fetch::Infrastructure::is_http_or_https_scheme(state_holder->location_url.value()->scheme())) {
+        // NOTE: ssh-web:// redirects are followed the same way — the scheme
+        //       is handled by ResourceLoader::dispatch_sshweb_load_request.
+        if (!Fetch::Infrastructure::is_http_or_https_scheme(state_holder->location_url.value()->scheme())
+#ifdef LADYBIRD_ENABLE_SSHWEB
+            && state_holder->location_url.value()->scheme() != "ssh-web"sv
+#endif
+        ) {
             // 1. Set entry's document state's resource to null.
             state_holder->replacement_document_state->set_resource(Empty {});
 
@@ -1278,6 +1284,13 @@ static void perform_navigation_params_fetch(JS::Realm& realm, GC::Ref<Navigation
 
         // 22. Set entry's URL to currentURL.
         state_holder->redirected_url = state_holder->current_url;
+
+#ifdef LADYBIRD_ENABLE_SSHWEB
+        if (!Fetch::Infrastructure::is_http_or_https_scheme(state_holder->current_url.scheme())) {
+            state_holder->request->url_list().append(state_holder->current_url);
+            state_holder->fetch_controller = nullptr;
+        }
+#endif
 
         perform_navigation_params_fetch(realm, state_holder, top_level_completion_steps, fetch_completion_steps);
     });

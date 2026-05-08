@@ -65,6 +65,7 @@
 #include <WebContent/WebContentClientEndpoint.h>
 #ifdef LADYBIRD_ENABLE_SSHWEB
 #    include <LibSSHWebClient/Client.h>
+extern SSHWebClient::Client* current_sshweb_client();
 #endif
 
 namespace WebContent {
@@ -1451,6 +1452,12 @@ void ConnectionFromClient::sshweb_tofu_decision(u64 prompt_id, bool accepted, bo
 {
     // Plan 7B will wire this through to the SSHWebClient::Client.
     (void)prompt_id; (void)accepted; (void)permanent;
+}
+
+void ConnectionFromClient::set_active_sshweb_identity(ByteString identity_id, ByteString identity_dir, ByteString passphrase)
+{
+    if (auto* client = current_sshweb_client())
+        client->set_active_identity(move(identity_id), move(identity_dir), move(passphrase));
 }
 
 }

@@ -369,7 +369,12 @@ Origin URL::origin() const
     // -> "https"
     // -> "ws"
     // -> "wss"
-    if (scheme().is_one_of("ftp"sv, "http"sv, "https"sv, "ws"sv, "wss"sv)) {
+    if (scheme().is_one_of("ftp"sv, "http"sv, "https"sv, "ws"sv, "wss"sv
+#ifdef LADYBIRD_ENABLE_SSHWEB
+            ,
+            "ssh-web"sv
+#endif
+            )) {
         // Return the tuple origin (url’s scheme, url’s host, url’s port, null).
         return Origin(scheme(), host().value(), port());
     }

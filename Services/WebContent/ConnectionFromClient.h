@@ -181,6 +181,8 @@ private:
     virtual void sshweb_tofu_decision(u64 prompt_id, bool accepted, bool permanent) override;
     // === End Plan 7B TOFU ===
 
+    virtual void set_active_sshweb_identity(ByteString identity_id, ByteString identity_dir, ByteString passphrase) override;
+
     NonnullOwnPtr<PageHost> m_page_host;
 
     HashMap<int, Web::FileRequest> m_requested_files {};

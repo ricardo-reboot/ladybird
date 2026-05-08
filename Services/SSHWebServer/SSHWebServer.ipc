@@ -8,10 +8,14 @@ endpoint SSHWebServer
     connect_new_client() => (IPC::TransportHandle handle)
 
     // Issue a command against an ssh-web:// origin (e.g. "capabilities").
-    start_request(u64 request_id, URL::URL url, ByteString command) =|
+    // identity_id/identity_dir/passphrase are empty for anonymous mode.
+    start_request(u64 request_id, URL::URL url, ByteString command, ByteString identity_id, ByteString identity_dir, ByteString passphrase) =|
 
     // Cancel an in-flight request.
     stop_request(u64 request_id) => (bool success)
+
+    // Drop all pooled SSH connections so the next request re-authenticates.
+    clear_ssh_pool() =|
 
     // Response to a TOFU prompt previously sent via tofu_prompt.
     // accepted: whether the user chose to trust the host key.

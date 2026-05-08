@@ -575,6 +575,11 @@ void ViewImplementation::send_tofu_decision(u64 prompt_id, bool accepted, bool p
 }
 // === End Plan 7B TOFU ===
 
+void ViewImplementation::set_active_sshweb_identity(ByteString identity_id, ByteString identity_dir, ByteString passphrase)
+{
+    client().async_set_active_sshweb_identity(move(identity_id), move(identity_dir), move(passphrase));
+}
+
 void ViewImplementation::paste_text_from_clipboard()
 {
     client().async_paste(page_id(), Application::the().clipboard_text());

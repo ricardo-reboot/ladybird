@@ -9,27 +9,19 @@
 #include <AK/JsonObject.h>
 #include <AK/JsonParser.h>
 #include <AK/JsonValue.h>
-#include <AK/LexicalPath.h>
 #include <AK/Random.h>
 #include <AK/StringBuilder.h>
 #include <AK/Time.h>
 #include <LibCore/DirIterator.h>
 #include <LibCore/Directory.h>
 #include <LibCore/File.h>
+#include <LibCore/Process.h>
 #include <LibCore/StandardPaths.h>
 #include <LibCore/System.h>
-#include <LibCrypto/Cipher/AES.h>
-#include <LibCrypto/Curves/EdwardsCurve.h>
-#include <LibCrypto/Hash/PBKDF2.h>
 #include <LibCrypto/Hash/SHA2.h>
 #include <LibWebView/IdentityStore.h>
 
 namespace WebView {
-
-static constexpr u32 PBKDF2_ITERATIONS = 600000;
-static constexpr size_t SALT_LENGTH = 16;
-static constexpr size_t IV_LENGTH = 12;
-static constexpr size_t TAG_LENGTH = 16;
 
 ByteString IdentityStore::storage_directory()
 {
@@ -42,6 +34,26 @@ ErrorOr<void> IdentityStore::ensure_storage_directory()
     return {};
 }
 
+ErrorOr<ByteBuffer> IdentityStore::parse_openssh_ed25519_pubkey(StringView file_content)
+{
+    // Format: "ssh-ed25519 <base64> <comment>\n"
+    auto parts = file_content.split_view(' ');
+    if (parts.size() < 2 || parts[0] != "ssh-ed25519"sv)
+        return Error::from_string_literal("Not an ed25519 public key");
+
+    auto decoded = TRY(decode_base64(parts[1]));
+    // Wire format: [uint32 type_len]["ssh-ed25519"][uint32 key_len][32-byte key]
+    // = 4 + 11 + 4 + 32 = 51 bytes minimum
+    if (decoded.size() < 51)
+        return Error::from_string_literal("Public key blob too short");
+
+    auto key_offset = 4 + 11 + 4; // skip type-length-prefix + "ssh-ed25519" + key-length-prefix
+    auto key_bytes = decoded.bytes().slice(key_offset, 32);
+    auto result = TRY(ByteBuffer::create_uninitialized(32));
+    memcpy(result.data(), key_bytes.data(), 32);
+    return result;
+}
+
 ErrorOr<void> IdentityStore::load()
 {
     m_identities.clear();
@@ -52,7 +64,7 @@ ErrorOr<void> IdentityStore::load()
     while (it.has_next()) {
         auto entry_name = it.next_path();
         auto meta_path = ByteString::formatted("{}/{}/meta.json", storage_directory(), entry_name);
-        auto pub_path  = ByteString::formatted("{}/{}/public",    storage_directory(), entry_name);
+        auto pub_path  = ByteString::formatted("{}/{}/ed25519.pub", storage_directory(), entry_name);
 
         auto meta_file = Core::File::open(meta_path, Core::File::OpenMode::Read);
         if (meta_file.is_error())
@@ -75,26 +87,25 @@ ErrorOr<void> IdentityStore::load()
         auto pub_file = Core::File::open(pub_path, Core::File::OpenMode::Read);
         if (pub_file.is_error())
             continue;
-        auto pub_bytes = TRY(pub_file.value()->read_until_eof());
-        if (pub_bytes.size() != 32)
+        auto pub_content = TRY(pub_file.value()->read_until_eof());
+        auto pub_content_str = StringView(pub_content.bytes());
+        auto pub_key = parse_openssh_ed25519_pubkey(pub_content_str);
+        if (pub_key.is_error())
             continue;
+
+        auto openssh_line = MUST(String::from_utf8(pub_content_str.trim_whitespace()));
 
         m_identities.append(SSHWebIdentity {
             .id = id.release_value(),
             .name = name.release_value(),
             .created_at = *created_at,
-            .public_key = move(pub_bytes),
+            .public_key = pub_key.release_value(),
+            .public_key_openssh = move(openssh_line),
             .encrypted = is_encrypted,
         });
     }
 
     return {};
-}
-
-static ErrorOr<ByteBuffer> derive_key(ReadonlyBytes passphrase, ReadonlyBytes salt)
-{
-    Crypto::Hash::PBKDF2 pbkdf2(Crypto::Hash::HashKind::SHA256);
-    return pbkdf2.derive_key(passphrase, salt, PBKDF2_ITERATIONS, 32);
 }
 
 static ErrorOr<void> write_file_atomic(ByteString const& dir, char const* name, ReadonlyBytes data, mode_t mode = 0644)
@@ -117,39 +128,36 @@ ErrorOr<String> IdentityStore::create(String name, String passphrase)
     auto dir = ByteString::formatted("{}/{}", storage_directory(), id);
     TRY(Core::Directory::create(dir, Core::Directory::CreateDirectories::Yes));
 
-    Crypto::Curves::Ed25519 ed25519;
-    auto private_seed = TRY(ed25519.generate_private_key());
-    auto public_key_bytes = TRY(ed25519.generate_public_key(private_seed));
-
+    auto key_path = ByteString::formatted("{}/ed25519", dir);
     bool is_encrypted = !passphrase.is_empty();
 
-    if (is_encrypted) {
-        // Generate random salt and IV.
-        u8 salt_buf[SALT_LENGTH];
-        fill_with_random(salt_buf);
-        ReadonlyBytes salt { salt_buf, SALT_LENGTH };
+    Vector<ByteString> args;
+    args.append("-t");
+    args.append("ed25519");
+    args.append("-N");
+    args.append(passphrase.to_byte_string());
+    args.append("-C");
+    args.append(name.to_byte_string());
+    args.append("-f");
+    args.append(key_path);
 
-        u8 iv_buf[IV_LENGTH];
-        fill_with_random(iv_buf);
-        ReadonlyBytes iv { iv_buf, IV_LENGTH };
-
-        // Derive 256-bit key from passphrase.
-        auto key = TRY(derive_key(passphrase.bytes(), salt));
-
-        // Encrypt private seed with AES-256-GCM.
-        Crypto::Cipher::AESGCMCipher cipher(key.bytes());
-        auto encrypted = TRY(cipher.encrypt(private_seed, iv, {}, TAG_LENGTH));
-
-        // Write encrypted private key + crypto parameters.
-        TRY(write_file_atomic(dir, "private", encrypted.ciphertext, 0600));
-        TRY(write_file_atomic(dir, "private.salt", salt));
-        TRY(write_file_atomic(dir, "private.iv", iv));
-        TRY(write_file_atomic(dir, "private.tag", encrypted.tag));
-    } else {
-        TRY(write_file_atomic(dir, "private", private_seed, 0600));
+    auto process = TRY(Core::Process::spawn("/usr/bin/ssh-keygen"sv, ReadonlySpan<ByteString>(args)));
+    auto exit_code = TRY(process.wait_for_termination());
+    if (exit_code != 0) {
+        (void)Core::System::rmdir(dir);
+        return Error::from_string_literal("ssh-keygen failed");
     }
 
-    TRY(write_file_atomic(dir, "public", public_key_bytes));
+    // Read the generated public key to extract raw bytes for fingerprinting.
+    auto pub_path = ByteString::formatted("{}/ed25519.pub", dir);
+    auto pub_file = TRY(Core::File::open(pub_path, Core::File::OpenMode::Read));
+    auto pub_content = TRY(pub_file->read_until_eof());
+    auto pub_content_str = StringView(pub_content.bytes());
+    auto public_key_bytes = TRY(parse_openssh_ed25519_pubkey(pub_content_str));
+    auto openssh_line = TRY(String::from_utf8(pub_content_str.trim_whitespace()));
+
+    // Set restrictive permissions on private key.
+    TRY(Core::System::chmod(key_path, 0600));
 
     // Build meta.json.
     auto now = AK::UnixDateTime::now().seconds_since_epoch();
@@ -167,6 +175,7 @@ ErrorOr<String> IdentityStore::create(String name, String passphrase)
         .name = move(name),
         .created_at = now,
         .public_key = move(public_key_bytes),
+        .public_key_openssh = move(openssh_line),
         .encrypted = is_encrypted,
     });
 
@@ -177,7 +186,7 @@ ErrorOr<void> IdentityStore::remove(String const& id)
 {
     auto dir = ByteString::formatted("{}/{}", storage_directory(), id);
 
-    for (auto const* filename : { "private", "private.salt", "private.iv", "private.tag", "public", "meta.json" }) {
+    for (auto const* filename : { "ed25519", "ed25519.pub", "meta.json" }) {
         auto path = ByteString::formatted("{}/{}", dir, filename);
         auto result = Core::System::unlink(path);
         if (result.is_error() && result.error().code() != ENOENT)
@@ -228,30 +237,20 @@ bool IdentityStore::is_encrypted(String const& id) const
     return false;
 }
 
-ErrorOr<ByteBuffer> IdentityStore::decrypt_private_key(String const& id, String const& passphrase)
+ErrorOr<bool> IdentityStore::verify_passphrase(String const& id, String const& passphrase)
 {
-    auto dir = ByteString::formatted("{}/{}", storage_directory(), id);
+    auto key_path = ByteString::formatted("{}/{}/ed25519", storage_directory(), id);
 
-    auto ciphertext_file = TRY(Core::File::open(ByteString::formatted("{}/private", dir), Core::File::OpenMode::Read));
-    auto ciphertext = TRY(ciphertext_file->read_until_eof());
+    Vector<ByteString> args;
+    args.append("-y");
+    args.append("-f");
+    args.append(key_path);
+    args.append("-P");
+    args.append(passphrase.to_byte_string());
 
-    auto salt_file = TRY(Core::File::open(ByteString::formatted("{}/private.salt", dir), Core::File::OpenMode::Read));
-    auto salt = TRY(salt_file->read_until_eof());
-
-    auto iv_file = TRY(Core::File::open(ByteString::formatted("{}/private.iv", dir), Core::File::OpenMode::Read));
-    auto iv = TRY(iv_file->read_until_eof());
-
-    auto tag_file = TRY(Core::File::open(ByteString::formatted("{}/private.tag", dir), Core::File::OpenMode::Read));
-    auto tag = TRY(tag_file->read_until_eof());
-
-    auto key = TRY(derive_key(passphrase.bytes(), salt.bytes()));
-
-    Crypto::Cipher::AESGCMCipher cipher(key.bytes());
-    auto plaintext = cipher.decrypt(ciphertext.bytes(), iv.bytes(), {}, tag.bytes());
-    if (plaintext.is_error())
-        return Error::from_string_literal("Wrong passphrase");
-
-    return plaintext.release_value();
+    auto process = TRY(Core::Process::spawn("/usr/bin/ssh-keygen"sv, ReadonlySpan<ByteString>(args)));
+    auto exit_code = TRY(process.wait_for_termination());
+    return exit_code == 0;
 }
 
 String IdentityStore::fingerprint(ReadonlyBytes public_key)
@@ -278,6 +277,7 @@ JsonArray IdentityStore::serialize() const
         obj.set("name"_string, ident.name);
         obj.set("created_at"_string, JsonValue(ident.created_at));
         obj.set("fingerprint"_string, fingerprint(ident.public_key));
+        obj.set("public_key_openssh"_string, ident.public_key_openssh);
         obj.set("encrypted"_string, JsonValue(ident.encrypted));
         MUST(arr.append(move(obj)));
     }

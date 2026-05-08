@@ -6,6 +6,7 @@
 
 #include <AK/Base64.h>
 #include <AK/ByteString.h>
+#include <LibCore/File.h>
 #include <Services/SSHWebServer/Connection.h>
 #include <libssh2.h>
 #include <netdb.h>
@@ -15,10 +16,11 @@
 
 namespace SSHWeb {
 
-Connection::Connection(int socket_fd, LIBSSH2_SESSION* session, HostKey host_key)
+Connection::Connection(int socket_fd, LIBSSH2_SESSION* session, HostKey host_key, String pubkey_openssh)
     : m_socket_fd(socket_fd)
     , m_session(session)
     , m_host_key(move(host_key))
+    , m_pubkey_openssh(move(pubkey_openssh))
 {
 }
 
@@ -132,13 +134,15 @@ ErrorOr<NonnullOwnPtr<Connection>> Connection::open(
         ByteString user = ByteString::formatted("sshweb:{}", identity->label);
         ByteString pub = identity->public_key_path.to_byte_string();
         ByteString priv = identity->private_key_path.to_byte_string();
+        ByteString passphrase_str = identity->passphrase.to_byte_string();
+        auto const* passphrase_cstr = passphrase_str.is_empty() ? nullptr : passphrase_str.characters();
         if (libssh2_userauth_publickey_fromfile_ex(
                 session,
                 user.characters(),
                 static_cast<unsigned int>(user.length()),
                 pub.characters(),
                 priv.characters(),
-                nullptr) != 0) {
+                passphrase_cstr) != 0) {
             libssh2_session_disconnect(session, "publickey auth failed");
             libssh2_session_free(session);
             close(sock);
@@ -156,7 +160,17 @@ ErrorOr<NonnullOwnPtr<Connection>> Connection::open(
         }
     }
 
-    return adopt_own(*new Connection { sock, session, move(received) });
+    String pubkey_openssh;
+    if (identity.has_value()) {
+        auto pub_file = Core::File::open(identity->public_key_path, Core::File::OpenMode::Read);
+        if (!pub_file.is_error()) {
+            auto content = pub_file.value()->read_until_eof();
+            if (!content.is_error())
+                pubkey_openssh = MUST(String::from_utf8(StringView(content.value().bytes()).trim_whitespace()));
+        }
+    }
+
+    return adopt_own(*new Connection { sock, session, move(received), move(pubkey_openssh) });
 }
 
 ErrorOr<ByteBuffer> Connection::execute_command(StringView command)
@@ -164,6 +178,11 @@ ErrorOr<ByteBuffer> Connection::execute_command(StringView command)
     auto* channel = libssh2_channel_open_session(m_session);
     if (!channel)
         return Error::from_string_literal("libssh2_channel_open_session failed");
+
+    if (!m_pubkey_openssh.is_empty()) {
+        auto pubkey_z = m_pubkey_openssh.to_byte_string();
+        libssh2_channel_setenv(channel, "SSHWEB_PUBKEY", pubkey_z.characters());
+    }
 
     auto command_z = TRY(String::from_utf8(command)).to_byte_string();
     if (libssh2_channel_exec(channel, command_z.characters()) != 0) {

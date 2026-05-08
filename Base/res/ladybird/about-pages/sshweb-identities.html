@@ -26,10 +26,32 @@
                 border: 1px solid var(--border-color, #ddd);
                 border-radius: 6px;
                 padding: 12px 16px;
+            }
+
+            .identity-card-row {
                 display: flex;
                 align-items: center;
                 justify-content: space-between;
                 gap: 16px;
+            }
+
+            .identity-pubkey {
+                display: none;
+                margin-top: 8px;
+            }
+
+            .identity-pubkey textarea {
+                width: 100%;
+                height: 52px;
+                font-family: monospace;
+                font-size: 12px;
+                resize: vertical;
+                border: 1px solid var(--border-color, #ccc);
+                border-radius: 4px;
+                padding: 6px 8px;
+                background: transparent;
+                color: inherit;
+                box-sizing: border-box;
             }
 
             .identity-info {
@@ -74,6 +96,21 @@
                 margin-top: 2px;
             }
 
+            .export-btn {
+                background: none;
+                border: 1px solid rgba(60, 120, 200, 0.4);
+                border-radius: 4px;
+                color: rgb(50, 100, 180);
+                padding: 4px 10px;
+                font-size: 13px;
+                cursor: pointer;
+                white-space: nowrap;
+            }
+
+            .export-btn:hover {
+                background: rgba(60, 120, 200, 0.08);
+            }
+
             .delete-btn {
                 background: none;
                 border: 1px solid rgba(200, 60, 60, 0.4);
@@ -87,6 +124,12 @@
 
             .delete-btn:hover {
                 background: rgba(200, 60, 60, 0.08);
+            }
+
+            .card-actions {
+                display: flex;
+                gap: 6px;
+                align-items: center;
             }
 
             .empty-state {
@@ -122,6 +165,13 @@
                 :root {
                     --border-color: #3d3d3d;
                 }
+                .export-btn {
+                    border-color: rgba(80, 140, 220, 0.35);
+                    color: rgb(100, 160, 220);
+                }
+                .export-btn:hover {
+                    background: rgba(80, 140, 220, 0.12);
+                }
                 .delete-btn {
                     border-color: rgba(220, 80, 80, 0.35);
                     color: rgb(220, 100, 100);
@@ -142,8 +192,7 @@
         </header>
 
         <div class="warning-banner">
-            &#9888; Keys are stored in plaintext on disk. Encrypted-at-rest is not yet implemented.
-            <!-- TODO: add keychain/passphrase encryption in a future wave -->
+            &#9888; Keys are stored in OpenSSH format. If a passphrase is set, the private key is encrypted by ssh-keygen.
         </div>
 
         <div class="card">
@@ -227,13 +276,40 @@
                     info.appendChild(fpEl);
                     info.appendChild(createdEl);
 
+                    const actions = document.createElement('div');
+                    actions.className = 'card-actions';
+
+                    const pubkeyArea = document.createElement('div');
+                    pubkeyArea.className = 'identity-pubkey';
+                    const pubkeyTextarea = document.createElement('textarea');
+                    pubkeyTextarea.readOnly = true;
+                    pubkeyTextarea.value = ident.public_key_openssh;
+                    pubkeyArea.appendChild(pubkeyTextarea);
+
+                    const exportBtn = document.createElement('button');
+                    exportBtn.className = 'export-btn';
+                    exportBtn.textContent = 'View Pub';
+                    exportBtn.addEventListener('click', () => {
+                        const visible = pubkeyArea.style.display === 'block';
+                        pubkeyArea.style.display = visible ? 'none' : 'block';
+                        exportBtn.textContent = visible ? 'View Pub' : 'Hide Pub';
+                    });
+
                     const delBtn = document.createElement('button');
                     delBtn.className = 'delete-btn';
                     delBtn.textContent = 'Delete';
                     delBtn.addEventListener('click', () => startDelete(ident));
 
-                    card.appendChild(info);
-                    card.appendChild(delBtn);
+                    actions.appendChild(exportBtn);
+                    actions.appendChild(delBtn);
+
+                    const row = document.createElement('div');
+                    row.className = 'identity-card-row';
+                    row.appendChild(info);
+                    row.appendChild(actions);
+
+                    card.appendChild(row);
+                    card.appendChild(pubkeyArea);
                     list.appendChild(card);
                 }
             }

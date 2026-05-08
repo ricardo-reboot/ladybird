@@ -42,11 +42,12 @@ public:
     HostKey const& host_key() const { return m_host_key; }
 
 private:
-    Connection(int socket_fd, LIBSSH2_SESSION* session, HostKey host_key);
+    Connection(int socket_fd, LIBSSH2_SESSION* session, HostKey host_key, String pubkey_openssh);
 
     int m_socket_fd { -1 };
     LIBSSH2_SESSION* m_session { nullptr };
     HostKey m_host_key;
+    String m_pubkey_openssh;
 };
 
 }

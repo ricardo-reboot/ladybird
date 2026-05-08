@@ -42,16 +42,17 @@ private:
 
     virtual Messages::SSHWebServer::InitTransportResponse init_transport(int peer_pid) override;
     virtual Messages::SSHWebServer::ConnectNewClientResponse connect_new_client() override;
-    virtual void start_request(u64 request_id, URL::URL url, ByteString command) override;
+    virtual void start_request(u64 request_id, URL::URL url, ByteString command, ByteString identity_id, ByteString identity_dir, ByteString passphrase) override;
     virtual Messages::SSHWebServer::StopRequestResponse stop_request(u64 request_id) override;
     virtual void tofu_decision(u64 prompt_id, bool accepted, bool permanent) override;
+    virtual void clear_ssh_pool() override;
 
     // host:port -> open SSHWeb::Connection. Lazily populated by start_request.
     HashMap<ByteString, NonnullOwnPtr<SSHWeb::Connection>> m_ssh_pool;
 
-    static ByteString pool_key(StringView host, u16 port)
+    static ByteString pool_key(StringView host, u16 port, StringView identity_id = {})
     {
-        return ByteString::formatted("{}:{}", host, port);
+        return ByteString::formatted("{}:{}:{}", host, port, identity_id);
     }
 
     // === Plan 7B TOFU ===
