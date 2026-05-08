@@ -6095,24 +6095,8 @@ void Document::update_animations_and_send_events(double timestamp)
     {
         HTML::TemporaryExecutionContext temporary_execution_context { realm() };
         // 1. Update the current time of all timelines associated with doc passing now as the timestamp.
-        //
-        // Note: Due to the hierarchical nature of the timing model, updating the current time of a timeline also involves:
-        // - Updating the current time of any animations associated with the timeline.
-        // - Running the update an animation’s finished state procedure for any animations whose current time has been
-        //   updated.
-        // - Queueing animation events for any such animations.
-        for (auto const& timeline : timelines_to_update) {
+        for (auto const& timeline : timelines_to_update)
             timeline->update_current_time(timestamp);
-
-            for (auto& animation : timeline->associated_animations())
-                animation.update();
-
-            auto animations = GC::RootVector<GC::Ref<Animations::Animation>> { heap() };
-            for (auto& animation : timeline->associated_animations())
-                animations.append(animation);
-            for (auto& animation : animations)
-                dispatch_events_for_animation_if_necessary(animation);
-        }
 
         // 2. Remove replaced animations for doc.
         remove_replaced_animations();
@@ -8009,18 +7993,19 @@ String Document::dump_display_list()
     HashMap<size_t, Vector<size_t>> children;
     Vector<size_t> root_contexts;
 
-    for (auto const& item : display_list->commands()) {
-        if (!item.context_index.value())
-            continue;
-        for (size_t node_index = item.context_index.value(); node_index && !visited.contains(node_index); node_index = visual_context_tree.node_at(Painting::VisualContextIndex(node_index)).parent_index.value()) {
+    display_list->for_each_command_header([&](Painting::DisplayListCommandHeader const& header, ReadonlyBytes) {
+        if (!header.context_index.value())
+            return;
+        for (size_t node_index = header.context_index.value(); node_index && !visited.contains(node_index);) {
             visited.set(node_index);
             auto parent = visual_context_tree.node_at(Painting::VisualContextIndex(node_index)).parent_index.value();
             if (parent)
                 children.ensure(parent).append(node_index);
             else if (!root_contexts.contains_slow(node_index))
                 root_contexts.append(node_index);
+            node_index = parent;
         }
-    }
+    });
 
     Function<void(size_t, size_t)> dump_context = [&](size_t node_index, size_t indent) {
         builder.append_repeated(' ', indent * 2);
@@ -8041,31 +8026,30 @@ String Document::dump_display_list()
     Function<void(Painting::DisplayList const&, int)> dump_commands =
         [&](Painting::DisplayList const& list, int base_indent) {
             int indent = base_indent;
-            for (auto const& item : list.commands()) {
-                int nesting_change = item.command.visit([](auto const& cmd) {
-                    if constexpr (requires { cmd.nesting_level_change; })
-                        return cmd.nesting_level_change;
-                    return 0;
-                });
+            list.for_each_command_header([&](Painting::DisplayListCommandHeader const& header, ReadonlyBytes payload) {
+                auto nesting_change = Painting::display_list_command_nesting_level_change(header.type);
 
                 if (nesting_change < 0)
                     indent = max(base_indent, indent + nesting_change);
 
                 builder.append_repeated(' ', indent * 2);
-                item.command.visit([&](auto const& command) {
-                    builder.appendff("{}@{}", command.command_name, item.context_index.value());
+                Optional<Painting::DisplayListResourceId> nested_display_list_id;
+                Painting::visit_display_list_command(header.type, payload, [&]<typename Command>(Command const& command) {
+                    builder.appendff("{}@{}", command.command_name, header.context_index.value());
                     command.dump(builder);
+                    if constexpr (IsSame<Command, Painting::PaintNestedDisplayList>)
+                        nested_display_list_id = command.display_list_id;
                 });
                 builder.append('\n');
 
-                if (auto const* nested = item.command.get_pointer<Painting::PaintNestedDisplayList>()) {
-                    if (nested->display_list)
-                        dump_commands(*nested->display_list, indent + 1);
+                if (nested_display_list_id.has_value()) {
+                    auto& nested_display_list = list.resource_storage().display_list(*nested_display_list_id);
+                    dump_commands(nested_display_list, indent + 1);
                 }
 
                 if (nesting_change > 0)
                     indent += nesting_change;
-            }
+            });
         };
 
     dump_commands(*display_list, 0);
