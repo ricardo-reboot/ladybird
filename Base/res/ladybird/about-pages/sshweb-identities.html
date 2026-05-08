@@ -41,6 +41,25 @@
                 font-weight: 600;
                 font-size: 15px;
                 margin-bottom: 2px;
+                cursor: pointer;
+                border-bottom: 1px dashed transparent;
+            }
+
+            .identity-name:hover {
+                border-bottom-color: var(--border-color, #ccc);
+            }
+
+            .identity-name-input {
+                font-weight: 600;
+                font-size: 15px;
+                margin-bottom: 2px;
+                border: 1px solid var(--border-color, #ccc);
+                border-radius: 3px;
+                padding: 1px 4px;
+                background: transparent;
+                color: inherit;
+                width: 100%;
+                max-width: 300px;
             }
 
             .identity-fingerprint {
@@ -137,6 +156,7 @@
 
                 <div class="generate-row">
                     <input id="new-name" type="text" placeholder="Display name (e.g. Work, Personal)" />
+                    <input id="new-passphrase" type="password" placeholder="Passphrase (optional)" style="flex:1" />
                     <button id="generate-btn" class="primary-button">Generate New Keypair</button>
                 </div>
 
@@ -191,7 +211,9 @@
 
                     const nameEl = document.createElement('div');
                     nameEl.className = 'identity-name';
-                    nameEl.textContent = ident.name;
+                    nameEl.textContent = (ident.encrypted ? '\u{1F512} ' : '') + ident.name;
+                    nameEl.title = 'Click to rename';
+                    nameEl.addEventListener('click', () => startRename(ident, nameEl));
 
                     const fpEl = document.createElement('div');
                     fpEl.className = 'identity-fingerprint';
@@ -216,6 +238,36 @@
                 }
             }
 
+            function startRename(ident, nameEl) {
+                const input = document.createElement('input');
+                input.className = 'identity-name-input';
+                input.type = 'text';
+                input.value = ident.name;
+                nameEl.replaceWith(input);
+                input.focus();
+                input.select();
+
+                function commit() {
+                    const newName = input.value.trim();
+                    if (newName && newName !== ident.name) {
+                        ladybird.sendMessage('renameIdentity', { id: ident.id, name: newName });
+                    } else {
+                        const restored = document.createElement('div');
+                        restored.className = 'identity-name';
+                        restored.textContent = ident.name;
+                        restored.title = 'Click to rename';
+                        restored.addEventListener('click', () => startRename(ident, restored));
+                        input.replaceWith(restored);
+                    }
+                }
+
+                input.addEventListener('blur', commit);
+                input.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+                    if (e.key === 'Escape') { input.value = ident.name; input.blur(); }
+                });
+            }
+
             function startDelete(ident) {
                 pendingDeleteId = ident.id;
                 document.getElementById('confirm-delete-text').textContent =
@@ -238,14 +290,17 @@
 
             document.getElementById('generate-btn').addEventListener('click', () => {
                 const nameInput = document.getElementById('new-name');
+                const passInput = document.getElementById('new-passphrase');
                 const name = nameInput.value.trim();
                 if (!name) {
                     nameInput.focus();
                     return;
                 }
+                const passphrase = passInput.value;
                 document.getElementById('error-banner').style.display = 'none';
-                ladybird.sendMessage('createIdentity', name);
+                ladybird.sendMessage('createIdentity', { name, passphrase });
                 nameInput.value = '';
+                passInput.value = '';
             });
 
             document.addEventListener('WebUILoaded', () => {

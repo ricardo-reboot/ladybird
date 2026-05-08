@@ -20,6 +20,7 @@ private:
     void load_identities();
     void create_identity(JsonValue const&);
     void delete_identity(JsonValue const&);
+    void rename_identity(JsonValue const&);
 
     IdentityStore m_store;
 };

@@ -6,6 +6,7 @@ add_library(ladybird_impl STATIC
     Interface/BookmarkFolder.mm
     Interface/BookmarksBar.mm
     Interface/Event.mm
+    Interface/IdentityPopover.mm
     Interface/InfoBar.mm
     Interface/LadybirdWebView.mm
     Interface/LadybirdWebViewBridge.cpp

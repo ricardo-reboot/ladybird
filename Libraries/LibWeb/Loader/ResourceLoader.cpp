@@ -729,7 +729,7 @@ void ResourceLoader::dispatch_sshweb_load_request(
                     return;
                 }
                 auto r = parsed.release_value();
-                on_headers_received->function()(r.headers, r.status_code, {});
+                on_headers_received->function()(r.headers, r.status_code, {}, {}, {});
                 on_data_received->function()(r.body.bytes());
                 on_complete->function()(true, {}, {});
             } else {
@@ -753,7 +753,7 @@ void ResourceLoader::dispatch_sshweb_load_request(
                         mime = "text/html"sv;
                     auto headers = HTTP::HeaderList::create({});
                     headers->append(HTTP::Header::isomorphic_encode("Content-Type"sv, mime));
-                    on_headers_received->function()(headers, 200, {});
+                    on_headers_received->function()(headers, 200, {}, {}, {});
                     on_data_received->function()(body.bytes());
                     on_complete->function()(true, {}, {});
                 } else {
@@ -772,13 +772,13 @@ void ResourceLoader::dispatch_sshweb_load_request(
                             "<h1>502 Bad Gateway</h1>"
                             "<p>The SSH-Web server's backend did not return a valid HTTP response.</p>"
                             "<p><code>{}</code></p>", parsed.error());
-                        on_headers_received->function()(headers, 502, {});
+                        on_headers_received->function()(headers, 502, {}, {}, {});
                         on_data_received->function()(StringView(body).bytes());
                         on_complete->function()(true, {}, {});
                         return;
                     }
                     auto r = parsed.release_value();
-                    on_headers_received->function()(r.headers, r.status_code, {});
+                    on_headers_received->function()(r.headers, r.status_code, {}, {}, {});
                     on_data_received->function()(r.body.bytes());
                     on_complete->function()(true, {}, {});
                 }

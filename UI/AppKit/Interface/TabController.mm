@@ -16,6 +16,7 @@
 #import <Interface/LadybirdWebView.h>
 #import <Interface/Menu.h>
 #import <Interface/Tab.h>
+#import <Interface/IdentityPopover.h>
 #import <Interface/TabController.h>
 #import <Utilities/Conversions.h>
 
@@ -201,7 +202,8 @@ static NSInteger autocomplete_suggestion_index(NSString* suggestion_text, Vector
 
     // SSH-Web indicator state
     NSString* _ssh_web_site_name;   // nil when not on an ssh-web:// origin
-    NSButton* _identity_button;     // shown only on ssh-web:// origins (7C stub)
+    IdentityPopover* _identity_popover;
+    NSButton* _identity_button;     // cached ref to the toolbar button view
 }
 
 @property (nonatomic, assign) BOOL already_requested_close;
@@ -402,9 +404,6 @@ static NSInteger autocomplete_suggestion_index(NSString* suggestion_text, Vector
     if (url.scheme() == "ssh-web"sv)
         [self setLocationFieldText:url.serialize()];
 
-    // Show identity button stub (7C).
-    if (_identity_button != nil)
-        [_identity_button setHidden:NO];
 }
 
 - (void)clearSSHWebIndicator
@@ -415,14 +414,11 @@ static NSInteger autocomplete_suggestion_index(NSString* suggestion_text, Vector
     if (field != nil)
         [field setBackgroundColor:[NSColor controlBackgroundColor]];
 
-    if (_identity_button != nil)
-        [_identity_button setHidden:YES];
 }
 
 - (IBAction)showIdentitySwitcher:(id)sender
 {
-    // 7C stub — the popover will be implemented in plan 7C.
-    (void)sender;
+    [self showIdentityDialog:sender];
 }
 
 // === Plan 7B TOFU ===
@@ -855,12 +851,16 @@ static NSInteger autocomplete_suggestion_index(NSString* suggestion_text, Vector
 - (NSToolbarItem*)identity_toolbar_item
 {
     if (!_identity_toolbar_item) {
-        auto* button = [self create_button:NSImageNameUserAccounts
-                               with_action:@selector(showIdentityDialog:)
-                              with_tooltip:@"SSH-Web identities"];
+        auto* image = [NSImage imageWithSystemSymbolName:@"person.crop.circle"
+                                       accessibilityDescription:@"SSH-Web identities"];
+        _identity_button = [NSButton buttonWithImage:image
+                                              target:self
+                                              action:@selector(showIdentityDialog:)];
+        [_identity_button setBordered:YES];
+        [_identity_button setToolTip:@"SSH-Web identities"];
 
         _identity_toolbar_item = [[NSToolbarItem alloc] initWithItemIdentifier:TOOLBAR_IDENTITY_IDENTIFIER];
-        [_identity_toolbar_item setView:button];
+        [_identity_toolbar_item setView:_identity_button];
     }
 
     return _identity_toolbar_item;
@@ -868,10 +868,17 @@ static NSInteger autocomplete_suggestion_index(NSString* suggestion_text, Vector
 
 - (IBAction)showIdentityDialog:(id)sender
 {
-    (void)sender;
-    auto url = URL::Parser::basic_parse("about:sshweb-identities"sv);
-    if (url.has_value())
-        [[self tab].web_view loadURL:url.value()];
+    if (!_identity_popover)
+        _identity_popover = [[IdentityPopover alloc] init];
+
+    NSView* anchor = nil;
+    if ([sender isKindOfClass:[NSView class]])
+        anchor = (NSView*)sender;
+    else if (_identity_button != nil)
+        anchor = _identity_button;
+
+    if (anchor != nil)
+        [_identity_popover showRelativeToView:anchor tab:[self tab]];
 }
 
 - (NSArray*)toolbar_identifiers
